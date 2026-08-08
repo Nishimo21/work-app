@@ -14,7 +14,7 @@
   --border:rgba(25,27,38,.08);
   /* 作業カラー */
   --kenpin:#10b07e; --satsuei:#f26a2f; --nouhin:#3a7bfd; --zatsumu:#8a63f6;
-  --shashin:#0aa8cf; --amazon:#e8447f;
+  --shashin:#0aa8cf; --amazon:#e8447f; --jiko:#0d9f7e;
   /* 作業者カラー: 飯田=黄緑 / 久場=黄色 / 長尾=ピンク */
   --w-iida:#6cc23a; --w-kuba:#efb400; --w-nagao:#f0629f;
   --team:#3a7bfd;
@@ -31,7 +31,7 @@
   --ink:#f3f4fa; --ink2:#b5b8c9; --muted:#7b7f92;
   --border:rgba(255,255,255,.09);
   --kenpin:#1ecb96; --satsuei:#ff7b42; --nouhin:#5c94ff; --zatsumu:#a488ff;
-  --shashin:#25c1e5; --amazon:#ff6ba1;
+  --shashin:#25c1e5; --amazon:#ff6ba1; --jiko:#17c69d;
   --w-iida:#84d551; --w-kuba:#ffcb2e; --w-nagao:#ff7fb6;
   --team:#5c94ff;
   --good:#2fd57e; --crit:#ff6b6b;
@@ -278,7 +278,10 @@ table.data tbody tr:hover{background:var(--surface-2)}
 <body>
 <header>
   <div class="brand"><span class="logo">⏱</span><span class="txt">作業内容管理アプリ</span></div>
+  <span id="shukaHead" style="display:none;font-size:13px;font-weight:900;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span>
   <div class="clock" id="clock"></div>
+  <button class="icon-btn" id="warnBtn" title="警告" style="display:none;width:auto;padding:0 12px;font-size:13.5px;font-weight:900;color:var(--crit);border-color:var(--crit)"></button>
+  <button class="icon-btn" id="manualBtn" title="使い方" style="width:auto;padding:0 12px;font-size:13.5px;font-weight:800">📖 使い方</button>
   <button class="icon-btn" id="themeBtn" title="表示切替">🌙</button>
 </header>
 <nav class="tabs" id="tabs"></nav>
@@ -301,13 +304,14 @@ const wcolHex=w=>tcolor(WVAR[w]);
 const ALL_TASKS={
   kenpin: {label:"検品",           cvar:"--kenpin",  icon:"🔍", unit:"個", timed:true,  fields:["product","count"]},
   satsuei:{label:"撮影",           cvar:"--satsuei", icon:"📷", unit:"個", timed:true,  fields:["count","retake"]},
-  shashin:{label:"写真チェック",    cvar:"--shashin", icon:"🖼", unit:"",  timed:true,  fields:["recheck"]},
-  amazon: {label:"Amazon画像貼付", cvar:"--amazon",  icon:"🏷", unit:"",  timed:true,  fields:[]},
-  nouhin: {label:"納品",           cvar:"--nouhin",  icon:"📦", unit:"個", timed:true,  team:true, fields:["packNo","count"]},
+  shashin:{label:"写真チェック",    cvar:"--shashin", icon:"🖼", unit:"件", timed:true,  fields:["count","recheck"]},
+  amazon: {label:"Amazon画像貼付", cvar:"--amazon",  icon:"🏷", unit:"件", timed:true,  fields:["count"]},
+  nouhin: {label:"梱包＆納品",      cvar:"--nouhin",  icon:"🚛", unit:"個", timed:true,  team:true, fields:["packNo","count"]},
+  jiko:   {label:"自己配梱包",      cvar:"--jiko",    icon:"📦", unit:"個", timed:true,  team:true, fields:["packNo","count"]},
   zatsumu:{label:"雑務",           cvar:"--zatsumu", icon:"🗂", unit:"件", timed:false, fields:["sub"]},
 };
 const SOLO_TIMED={kenpin:ALL_TASKS.kenpin, satsuei:ALL_TASKS.satsuei, shashin:ALL_TASKS.shashin, amazon:ALL_TASKS.amazon};
-const ZATSUMU_SUB=["段ボール開封","自己配梱包","電話対応","付属品の処理","掃除","備品チェック","その他"];
+const ZATSUMU_SUB=["段ボール開封","電話対応","掃除","備品チェック","ヤフオク入札","その他"];
 
 function tcolor(c){if(!c)return '#888';if(c[0]==='#')return c;
   return getComputedStyle(document.documentElement).getPropertyValue(c).trim()||'#888';}
@@ -334,6 +338,7 @@ const thisMonthKey=()=>monthKey(nowISO());
 function monthLabel(mk){const[y,m]=mk.split('-');return `${y}年${parseInt(m)}月`;}
 function esc(s){return (s==null?'':String(s)).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
 const known=r=>ALL_TASKS[r.cat];
+const effSec=r=>r&&r.noTime?0:(r.sec||0); // 再チェックのみの計測は合計タイムに含めない
 
 /* ---------- 紙吹雪 ---------- */
 const CONF_COLORS=['#6a5bff','#e8447f','#ffb020','#10b07e','#0aa8cf','#f26a2f'];
@@ -357,7 +362,7 @@ function confetti(){
 /* ---------- routing ---------- */
 let route={page:"home",worker:null};
 const TABS=[{id:"home",label:"🏠 ホーム"},...WORKERS.map((w,i)=>({id:"w"+i,label:w,worker:w})),
-  {id:"team",label:"👥 全員作業"},{id:"admin",label:"📊 管理者"},{id:"shiire",label:"🔗 仕入表連携"}];
+  {id:"team",label:"👥 全員作業"},{id:"bihin",label:"🧰 備品"},{id:"admin",label:"📊 管理者"},{id:"shiire",label:"🔗 仕入表連携"}];
 function renderTabs(){
   const el=document.getElementById('tabs');el.innerHTML='';
   TABS.forEach(t=>{const b=document.createElement('button');b.textContent=t.label;
@@ -367,12 +372,12 @@ function renderTabs(){
     b.onclick=()=>t.worker?go('worker',t.worker):go(t.id);
     el.appendChild(b);});
 }
-function go(page,worker){route={page:worker?'worker':page,worker:worker||null};render();window.scrollTo(0,0);}
+function go(page,worker){route={page:worker?'worker':page,worker:worker||null};if(page==='bihin')try{bihinWantFetch=true;}catch(e){}render();window.scrollTo(0,0);}
 
 /* ---------- timers ---------- */
 const findActive=(cat,wkey)=>state.active.find(a=>a.cat===cat&&a.wkey===wkey);
-function startTimer(cat,workers){const wkey=workers.slice().sort().join(',');if(findActive(cat,wkey))return;
-  state.active.push({id:uid(),cat,workers:workers.slice(),wkey,start:nowISO()});saveState();render();}
+function startTimer(cat,workers,opts){const wkey=workers.slice().sort().join(',');if(findActive(cat,wkey))return;
+  state.active.push({id:uid(),cat,workers:workers.slice(),wkey,start:nowISO(),batStart:!!(opts&&opts.bat)});saveState();render();}
 function stopTimer(id){const a=state.active.find(x=>x.id===id);if(a)openStopModal(a);}
 function discardTimer(id){state.active=state.active.filter(x=>x.id!==id);saveState();render();toast("計測を取り消しました");}
 
@@ -401,25 +406,38 @@ function openZatsumuOther(workers){
 }
 
 /* ---------- 停止モーダル ---------- */
-function openStopModal(a){
-  const t=ALL_TASKS[a.cat],end=nowISO(),sec=durSec(a.start,end);
+function openStopModal(a,editRec){ // editRec指定時は記録の編集モード(タイムストップと同じ画面)
+  const t=ALL_TASKS[a.cat],end=editRec?editRec.end:nowISO(),sec=durSec(a.start,end);
   let f='';
   const autoKenpin = (a.cat==='kenpin' && scfg.url);
-  if(t.fields.includes('product'))f+=fieldRow('商品コード / 商品名','<input type="text" id="m_product" placeholder="例: 553 / 商品名">');
+  const boardStep = a.cat==='satsuei'?'satsuei':(a.cat==='shashin'?'shashin':(a.cat==='amazon'?'amazon':((a.cat==='nouhin'||a.cat==='jiko')?'konpo':null)));
+  // 撮り直し(撮影) / 再チェック(写真チェック): 済SKUから対象を選ぶ特別選択
+  const special = t.fields.includes('retake')
+    ? {label:'撮り直し', src:'satsuei', srcLabel:'撮影', field:'retake'}
+    : (t.fields.includes('recheck') ? {label:'再チェック', src:'shashin', srcLabel:'写真チェック', field:'recheck'} : null);
+  // 検品の商品コードは仕入表から自動で拾えるため入力欄は出さない
   if(t.fields.includes('packNo')) f+=fieldRow('梱包No.','<input type="text" id="m_packNo" placeholder="例: 328">');
-  if(t.fields.includes('count'))  f+=fieldRow(`${t.label}個数${autoKenpin?'（仕入表から自動入力・修正可）':''}`,`<input type="number" id="m_count" min="0" step="1" placeholder="0" inputmode="numeric">`);
+  if(boardStep) f+=`<div class="frow" id="m_boardWrap"><label>納品ボードから選択（チェックした分が個数に加算）</label><div id="m_board"></div></div>`;
+  if(boardStep&&special) f+=`<div class="frow" id="m_spSec" style="display:none"><label>${special.label}する商品を選択（${special.srcLabel}済みのSKUから・済は解除されません）</label><div id="m_sp"></div></div>`;
+  if(t.fields.includes('count'))  f+=fieldRow(`${t.label}個数${(autoKenpin||boardStep)?'（自動入力・修正可）':''}`,`<input type="number" id="m_count" min="0" step="1" placeholder="0" inputmode="numeric">`);
   if(autoKenpin) f+=`<div class="thint" id="m_autocnt" style="margin:-6px 0 12px">🧮 仕入表の色変更を集計中…</div>`;
-  if(t.fields.includes('retake')) f+=`<div class="frow"><label class="checkrow" id="m_retakeRow"><input type="checkbox" id="m_retake"> 撮り直し</label></div>`;
-  if(t.fields.includes('recheck'))f+=`<div class="frow"><label class="checkrow" id="m_recheckRow"><input type="checkbox" id="m_recheck"> 再チェック（2回目以降のチェック）</label></div>`;
+  if(a.cat==='kenpin') f+=`<div class="frow"><button type="button" id="m_bat" style="width:100%;border:2px solid transparent;border-radius:12px;padding:11px 14px;font-size:14px;font-weight:800;cursor:pointer;font-family:inherit;transition:.15s">🔋 バッテリー仕入表の検品を含む</button></div>`;
+  if(boardStep) f+=`<div class="thint" id="m_bcnt" style="margin:-6px 0 12px"></div>`;
   f+=fieldRow('備考',`<textarea id="m_note" placeholder="メモ (任意)"></textarea>`);
   const box=document.getElementById('modalBox');
-  box.innerHTML=`<h3 style="color:${tcolor(t.cvar)}">${t.icon} ${t.label} を終了</h3>
-    <div style="display:flex;gap:16px;margin-bottom:16px;flex-wrap:wrap">
-      ${miniInfo('作業者',a.workers.join('・'))}${miniInfo('開始',fmtHM(a.start))}${miniInfo('終了',fmtHM(end))}
-      <div><div style="font-size:12px;color:var(--muted)">作業時間</div><div style="font-weight:900;color:${tcolor(t.cvar)};font-variant-numeric:tabular-nums;font-size:17px">${fmtDur(sec)}</div></div>
+  const headInfo=editRec
+    ?`${miniInfo('作業者',a.workers.join('・'))}
+      <div><div style="font-size:12px;color:var(--muted)">開始</div><input type="time" id="w_start" value="${fmtHM(a.start)}" style="padding:7px 9px"></div>
+      <div><div style="font-size:12px;color:var(--muted)">終了</div><input type="time" id="w_end" value="${fmtHM(end)}" style="padding:7px 9px"></div>`
+    :`${miniInfo('作業者',a.workers.join('・'))}${miniInfo('開始',fmtHM(a.start))}${miniInfo('終了',fmtHM(end))}
+      <div><div style="font-size:12px;color:var(--muted)">作業時間</div><div style="font-weight:900;color:${tcolor(t.cvar)};font-variant-numeric:tabular-nums;font-size:17px">${fmtDur(sec)}</div></div>`;
+  box.innerHTML=`<h3 style="color:${tcolor(t.cvar)}">${t.icon} ${t.label} を${editRec?'編集':'終了'}</h3>
+    <div style="display:flex;gap:16px;margin-bottom:16px;flex-wrap:wrap;align-items:flex-end">
+      ${headInfo}
+      ${special?`<button id="m_spBtn" style="margin-left:auto;border:2px solid ${tcolor(t.cvar)};background:var(--surface);color:${tcolor(t.cvar)};border-radius:999px;padding:9px 16px;font-size:14px;font-weight:800;cursor:pointer;font-family:inherit;transition:.15s">🔁 ${special.label}<span style="display:inline-block;width:1.05em;text-align:right;opacity:0">✓</span></button>`:''}
     </div>${f}
-    <div class="modal-acts"><button class="btn ghost" onclick="closeModal()">戻る</button>
-    <button class="btn primary" id="m_save">記録する</button></div>`;
+    <div class="modal-acts">${editRec?'<button class="btn danger sm" id="w_del">削除</button>':''}<button class="btn ghost" onclick="closeModal()">戻る</button>
+    <button class="btn primary" id="m_save">${editRec?'保存':'記録する'}</button></div>`;
   showModal();
   ['m_retake','m_recheck'].forEach(id=>{const cb=document.getElementById(id);
     if(cb)cb.onchange=()=>cb.closest('.checkrow').classList.toggle('on',cb.checked);});
@@ -432,7 +450,7 @@ function openStopModal(a){
       const box=document.getElementById('m_autocnt'); if(!box)return;
       const {cnt,re}=kenpinAutoCounts(a.start,end,a.workers[0]); autoRe=re;
       const inp2=document.getElementById('m_count');
-      if(inp2&&!inp2.dataset.user)inp2.value=cnt;
+      if(inp2&&!inp2.dataset.user&&!inp2.disabled)inp2.value=cnt;
       box.innerHTML=`🧮 自動カウント: 検品 <b>${cnt}個</b>（灰→色変更・同一No.は1個）・ 再検品 <b style="color:var(--satsuei)">${re}件</b>（赤→他色 / 平均に含めず）
         <a href="#" id="m_reauto" style="margin-left:8px;font-weight:800;color:var(--nouhin);text-decoration:none">${shiireData.loading?'集計中…':'↻ 再集計'}</a>`;
       const ra=document.getElementById('m_reauto');
@@ -441,16 +459,349 @@ function openStopModal(a){
     window.__modalAuto=apply;
     fetchChanges(true,true); apply();
   }
+  // 撮り直し/再チェック: 作業時間横のボタンで対象SKU選択欄を開閉(通常の選択と併用OK)
+  // 選択しても済は解除されず、個数にも加算されない(作業時間は今まで通り合計に加算)
+  let spOn=false, modalExtraCount=0, mExtraOpen=false, spExtra=0;
+  const modalResale=new Set(), modalSpecial=new Set(), modalChain=new Set(), modalPend=new Set(), mOpen={};
+  const modalOpenISO=nowISO();
+  let applyB=null, renderMB=null, renderSP=null;
+  // 付属品(バッテリー仕入表): 検品=チェックボックスで手動指定 / 納品工程=選択SKUから自動判定
+  let batManual=false, batAuto=!!(editRec&&editRec.bat);
+  const applyBatCnt=()=>{
+    const ci=document.getElementById('m_count');if(!ci)return;
+    if(batManual||batAuto){ci.value='';ci.disabled=true;ci.style.background='var(--surface-2)';ci.style.color='var(--muted)';ci.placeholder='計測不要';}
+    else{ci.disabled=false;ci.style.background='';ci.style.color='';ci.placeholder='0';}
+  };
+  const mBat=document.getElementById('m_bat');
+  const mBatSync=()=>{if(!mBat)return;
+    mBat.style.borderColor=tcolor(t.cvar);
+    mBat.style.background=batManual?tcolor(t.cvar):'var(--surface)';
+    mBat.style.color=batManual?'#fff':tcolor(t.cvar);
+    mBat.innerHTML='<span style="display:inline-block;width:1.05em;opacity:'+(batManual?1:0)+'">✓</span>🔋 バッテリー仕入表の検品を含む';};
+  if(mBat){
+    mBatSync();
+    mBat.onclick=()=>{ // ワンタップで選択/解除
+      batManual=!batManual;mBatSync();applyBatCnt();
+      if(!batManual){const ci=document.getElementById('m_count');if(ci)delete ci.dataset.user;if(window.__modalAuto)window.__modalAuto();}
+    };
+  }
+  // 「バッテリー仕入表検品」を選んで開始したタイマーは最初から選択済みにする
+  if(mBat&&a.batStart&&!editRec){batManual=true;mBatSync();applyBatCnt();}
+  const spBtn=document.getElementById('m_spBtn');
+  if(spBtn)spBtn.onclick=()=>{
+    spOn=!spOn;
+    spBtn.style.background=spOn?tcolor(t.cvar):'var(--surface)';
+    spBtn.style.color=spOn?'#fff':tcolor(t.cvar);
+    spBtn.innerHTML=`🔁 ${special.label}<span style="display:inline-block;width:1.05em;text-align:right;opacity:${spOn?1:0}">✓</span>`;
+    const rs=document.getElementById('m_spSec'); if(rs){rs.style.display=spOn?'':'none'; if(spOn&&renderSP)renderSP();}
+    if(applyB)applyB();
+  };
+  // 編集モード: 既存の値を反映
+  if(editRec){
+    const ic=document.getElementById('m_count'); if(ic&&editRec.count!=null)ic.value=editRec.count;
+    const nt=document.getElementById('m_note'); if(nt)nt.value=editRec.note||'';
+    const wd=document.getElementById('w_del');
+    if(wd)wd.onclick=()=>{if(confirm('この記録を削除しますか？')){
+      state.records=state.records.filter(x=>x.id!==editRec.id);pushDelete(editRec.id);
+      saveState();closeModal();render();toast('削除しました');}};
+    if(spBtn&&special&&((special.field==='retake'&&editRec.retake)||(special.field==='recheck'&&editRec.recheck)))spBtn.click();
+    if(mBat&&editRec.bat){batManual=true;mBatSync();applyBatCnt();}
+  }
+  // 撮影/写真チェック/Amazon貼付/納品(梱包): この画面で納品ボードを選択して個数を自動集計
+  if(boardStep){
+    const inp=document.getElementById('m_count');
+    if(inp)inp.oninput=()=>inp.dataset.user='1';
+    const stepLabel={satsuei:'撮影',shashin:'写真チェック',amazon:'Amazon貼付',konpo:'梱包'}[boardStep];
+    applyB=()=>{
+      let base;
+      if(editRec){const st0=boardWindowStat(boardStep,modalOpenISO,nowISO());base=Math.max(0,(editRec.count||0)+st0.plus-st0.minus);}
+      else base=autoBoardCount(boardStep,a.start,nowISO());
+      const extra=modalResale.size+modalExtraCount+modalPend.size;
+      const total=base+extra; // 撮り直し/再チェックの選択分は個数に含めない
+      // 付属品(バッテリー仕入表)のSKUが含まれるか判定(含まれる場合は個数・タイム集計外)
+      const wS=new Date(editRec?modalOpenISO:a.start).getTime(), wE=Date.now()+60000;
+      const lastB={};boardEvents.forEach(x=>{if(x.step!==boardStep||x.t<wS||x.t>wE||!x.i)return;lastB[x.i]=x.n;});
+      batAuto=Object.keys(lastB).some(i=>lastB[i]>0&&isBatSKU(i))
+        ||[...modalResale].some(isBatSKU)||[...modalPend].some(isBatSKU)||[...modalChain].some(isBatSKU)
+        ||!!(editRec&&editRec.bat&&batAuto);
+      applyBatCnt();
+      const inp2=document.getElementById('m_count');
+      if(inp2&&!inp2.dataset.user&&!inp2.disabled)inp2.value=total;
+      const bc=document.getElementById('m_bcnt');
+      const spTotal=modalSpecial.size+(special&&special.field==='recheck'?spExtra:0);
+      if(bc)bc.innerHTML=(batAuto?`<div style="color:var(--satsuei);font-weight:800">🔋 バッテリー仕入表のセットが選択されています — 個数の入力は不要です（通常商品は別で計測してください）</div>`:'')
+        +`📦 ${stepLabel}の選択合計: <b>${total}${t.unit||'個'}</b>${extra?`（セット${base} + 追加${extra}）`:''}`
+        +(spTotal?` ・ 🔁 ${special.label} <b>${spTotal}件</b>（個数${special.field==='recheck'?'・タイム':''}に含めません）`:'');
+    };
+    renderMB=()=>{
+      const host=document.getElementById('m_board');if(!host)return;
+      if(!scfg.url){host.innerHTML='<div class="thint">仕入表と接続すると使えます</div>';return;}
+      if(!boardData.fetchedAt){host.innerHTML='<div class="thint">納品ボードを読み込み中…</div>';return;}
+      const visible=boardData.groups.slice().sort((x,y)=>x.set.localeCompare(y.set))
+        .filter(g=>{const st=boardData.states[g.set]||{};
+          if(st.hidden||st.done)return false; // 納品完了セットはリストから消える
+          if(a.cat==='nouhin'&&st.selfDel)return false;   // 梱包＆納品には自己配を出さない
+          if(a.cat==='jiko'&&!st.selfDel)return false;    // 自己配梱包には自己配のみ
+          return true;});
+      const rows=visible.map(g=>{
+        const st=boardData.states[g.set]||{steps:{}};
+        const list=stepItems(g,boardStep); // 写真チェック=撮影済のみ / Amazon貼付=写真チェック済のみ
+        if(STEP_PREV[boardStep]&&!list.length)return '';
+        const info=stepInfo(list,st.steps&&st.steps[boardStep]);
+        const grid=mOpen[g.set]?`<div style="display:flex;gap:5px;flex-wrap:wrap;padding:7px 0 3px">
+          ${list.map(i=>{const on=st.steps&&st.steps[boardStep]&&(st.steps[boardStep].all||(st.steps[boardStep].checked&&st.steps[boardStep].checked[i]));
+            return `<button type="button" data-mbi="${g.set}|${i}" style="border:1.5px solid ${on?tcolor(t.cvar):'var(--border)'};background:${on?tcolor(t.cvar):'var(--surface)'};color:${on?'#fff':'var(--ink2)'};border-radius:8px;padding:5px 8px;font-size:12px;font-weight:800;cursor:pointer;font-family:inherit"><span style="display:inline-block;width:1.05em;text-align:left;opacity:${on?1:0}">✓</span>${esc(i)}</button>`;}).join('')}</div>`:'';
+        return `<div style="padding:7px 0;border-bottom:1px dashed var(--border)">
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+            <b style="font-size:14px">${g.bat?'🔋':'📦'} ${esc(g.set)}〜</b>${g.bat?'<span class="tag" style="color:var(--satsuei)">バッテリー</span>':''}
+            <span style="font-size:12px;color:${info.done?'var(--good)':'var(--muted)'}">${info.done?'✅ 済':esc(info.label)+(info.cnt?'':' ・'+list.length+'個')}</span>
+            <span style="margin-left:auto;display:flex;gap:6px">
+              ${info.done
+                ?`<button type="button" class="btn ghost sm" data-mbc="${g.set}" style="color:var(--crit)">↺ 全て解除</button>`
+                :`<button type="button" class="btn ghost sm" data-mba="${g.set}" style="color:${tcolor(t.cvar)}">✓ 全て完了</button>`}
+              <button type="button" class="btn ghost sm" data-mbt="${g.set}">${mOpen[g.set]?'閉じる':'個別選択'}</button>
+            </span></div>${grid}</div>`;
+      }).join('')||`<div class="thint">${boardStep==='shashin'?'撮影済みのSKUがまだありません（先に撮影のチェックを入れてください）':(boardStep==='amazon'?'写真チェック済みのSKUがまだありません（先に写真チェックを入れてください）':(boardStep==='konpo'?'写真チェック済みの納品対象SKUがまだありません':'進行中の納品セットはありません'))}</div>`;
+      // 追加SKUの表示:
+      //  写真チェック/Amazon貼付 → 前工程済みの追加SKUを常時ボタン表示(展開不要)
+      //  撮影 → 撮影済みの追加SKUを常時表示(タップで取り消し=ミス修正) + 再出品リストは展開式
+      const est=boardData.states['_extraSKU'];
+      let chainRow='';
+      if(STEP_PREV[boardStep]){
+        const prev=STEP_PREV[boardStep];
+        const prevDone=Object.keys((est&&est.steps&&est.steps[prev]&&est.steps[prev].checked)||{}).sort();
+        const curC=(est&&est.steps&&est.steps[boardStep]&&est.steps[boardStep].checked)||{};
+        const prevLabel=prev==='satsuei'?'撮影':'写真チェック';
+        if(prevDone.length)chainRow=`<div style="padding:8px 0 4px;border-bottom:1px dashed var(--border)">
+          <div style="font-size:12px;font-weight:800;color:var(--ink2);margin-bottom:6px">🏷 追加SKU（${prevLabel}済み）</div>
+          <div style="display:flex;gap:5px;flex-wrap:wrap">
+            ${prevDone.map(n=>{const on=!!curC[n];
+              return `<button type="button" data-mbx="${esc(n)}" style="border:1.5px solid ${on?tcolor(t.cvar):'var(--border)'};background:${on?tcolor(t.cvar):'var(--surface)'};color:${on?'#fff':'var(--ink2)'};border-radius:8px;padding:5px 8px;font-size:12px;font-weight:800;cursor:pointer;font-family:inherit"><span style="display:inline-block;width:1.05em;text-align:left;opacity:${on?1:0}">✓</span>${esc(n)}</button>`;}).join('')}</div></div>`;
+      }else if(boardStep==='satsuei'){
+        const satDone=Object.keys((est&&est.steps&&est.steps.satsuei&&est.steps.satsuei.checked)||{}).sort();
+        if(satDone.length)chainRow=`<div style="padding:8px 0 4px;border-bottom:1px dashed var(--border)">
+          <div style="font-size:12px;font-weight:800;color:var(--ink2);margin-bottom:6px">🏷 撮影済みの追加SKU <span style="font-weight:600;color:var(--muted)">(タップで取り消し・ミス修正用)</span></div>
+          <div style="display:flex;gap:5px;flex-wrap:wrap">
+            ${satDone.map(n=>`<button type="button" data-mbdel="${esc(n)}" style="border:1.5px solid var(--border);background:var(--surface);color:var(--ink2);border-radius:8px;padding:5px 8px;font-size:12px;font-weight:800;cursor:pointer;font-family:inherit">✓${esc(n)} ✕</button>`).join('')}</div></div>`;
+      }
+      let extraChips='';
+      if(!STEP_PREV[boardStep]){
+        const resale=boardData.resale||[];
+        extraChips=resale.length?`<div style="font-size:12px;font-weight:800;color:var(--ink2);margin:9px 0 5px">再出品・再納品待ちから選択</div>
+          <div style="display:flex;gap:5px;flex-wrap:wrap">
+            ${resale.map(n=>{const on=modalResale.has(n);
+              return `<button type="button" data-mbr="${esc(n)}" style="border:1.5px solid ${on?tcolor(t.cvar):'var(--border)'};background:${on?tcolor(t.cvar):'var(--surface)'};color:${on?'#fff':'var(--ink2)'};border-radius:8px;padding:5px 8px;font-size:12px;font-weight:800;cursor:pointer;font-family:inherit"><span style="display:inline-block;width:1.05em;text-align:left;opacity:${on?1:0}">✓</span>${esc(n)}</button>`;}).join('')}</div>`:'';
+      }
+      const extraBtnLabel=STEP_PREV[boardStep]
+        ?(mExtraOpen?'▲ 閉じる':'＋ 選択した以外の個数')
+        :(mExtraOpen?'▲ 別のSKUを閉じる':'＋ 別のSKUを追加');
+      const extraHtml=`<div style="padding:8px 0 2px">
+        <button type="button" class="btn ghost sm" id="m_extraBtn">${extraBtnLabel}</button>
+        ${mExtraOpen?`${extraChips}
+          <div style="display:flex;gap:8px;align-items:center;margin-top:9px">
+            <span style="font-size:12.5px;font-weight:800;color:var(--ink2)">選択した以外の個数</span>
+            <input type="number" id="m_extra" min="0" placeholder="0" value="${modalExtraCount||''}" style="width:100px">
+          </div>`:''}</div>`;
+      // 納品待ち(前回一部納品の残りSKU) — 先頭3桁ごとにまとめて表示
+      let pendRow='';
+      if(a.cat==='nouhin'||a.cat==='jiko'){
+        const kp=(boardData.states['_koboreSKU']&&boardData.states['_koboreSKU'].items)||{};
+        const wantSelf=(a.cat==='jiko');
+        const pend=Object.keys(kp).filter(n=>((kp[n]===1)===wantSelf)).sort();
+        if(pend.length){
+          const bySet={};pend.forEach(n=>{const s3=String(n).slice(0,3);(bySet[s3]=bySet[s3]||[]).push(n);});
+          pendRow=Object.keys(bySet).sort().map(s3=>`<div style="padding:8px 0 4px;border-bottom:1px dashed var(--border)">
+            <div style="font-size:12px;font-weight:800;color:var(--satsuei);margin-bottom:6px">📦 ${esc(s3)}〜（納品待ち・前回の残り）</div>
+            <div style="display:flex;gap:5px;flex-wrap:wrap">
+              ${bySet[s3].map(n=>{const on=modalPend.has(n);
+                return `<button type="button" data-mbp="${esc(n)}" style="border:1.5px solid ${on?tcolor(t.cvar):'var(--satsuei)'};background:${on?tcolor(t.cvar):'color-mix(in srgb,var(--satsuei) 8%,var(--surface))'};color:${on?'#fff':'var(--ink2)'};border-radius:8px;padding:5px 8px;font-size:12px;font-weight:800;cursor:pointer;font-family:inherit"><span style="display:inline-block;width:1.05em;text-align:left;opacity:${on?1:0}">✓</span>${esc(n)}</button>`;}).join('')}</div></div>`).join('');
+        }
+      }
+      host.innerHTML=`<div style="background:var(--surface-2);border:1px solid var(--border);border-radius:13px;padding:4px 12px">${rows}${pendRow}${chainRow}${extraHtml}</div>`;
+      const eb=document.getElementById('m_extraBtn');
+      if(eb)eb.onclick=()=>{mExtraOpen=!mExtraOpen;renderMB();};
+      const ei=document.getElementById('m_extra');
+      if(ei)ei.oninput=()=>{modalExtraCount=Math.max(0,parseInt(ei.value)||0);applyB();};
+    };
+    // 撮り直し/再チェック対象の選択(クリックしても済は解除されない)
+    let spMoreOpen=false;
+    const spChip=(i,on)=>`<button type="button" data-msp="${esc(i)}" style="border:1.5px solid ${on?tcolor(t.cvar):'var(--border)'};background:${on?tcolor(t.cvar):'var(--surface)'};color:${on?'#fff':'var(--ink2)'};border-radius:8px;padding:5px 8px;font-size:12px;font-weight:800;cursor:pointer;font-family:inherit"><span style="display:inline-block;width:1.05em;text-align:left;opacity:${on?1:0}">✓</span>${esc(i)}</button>`;
+    const srcDoneItems=()=>{ // special.src の済SKU一覧(セット+追加SKU)
+      const items=[];
+      boardData.groups.slice().sort((x,y)=>x.set.localeCompare(y.set)).forEach(g=>{
+        const st=boardData.states[g.set];if(st&&st.hidden)return;
+        const ss=st&&st.steps&&st.steps[special.src];if(!ss)return;
+        g.items.forEach(i=>{if(ss.all||(ss.checked&&ss.checked[i]))items.push(i);});
+      });
+      const est=boardData.states['_extraSKU'];
+      const ec=(est&&est.steps&&est.steps[special.src]&&est.steps[special.src].checked)||{};
+      Object.keys(ec).sort().forEach(n=>{if(!items.includes(n))items.push(n);});
+      return items;
+    };
+    renderSP=()=>{
+      const host=document.getElementById('m_sp');if(!host)return;
+      if(special.field==='recheck'){
+        // 再チェック: まず撮影で「撮り直し」選択された商品のみ表示
+        const pending=Object.keys(retakePending().checked).sort();
+        const others=srcDoneItems().filter(i=>!pending.includes(i));
+        host.innerHTML=`<div style="background:var(--surface-2);border:1px solid var(--border);border-radius:13px;padding:10px 12px">
+          ${pending.length
+            ?`<div style="font-size:12px;font-weight:800;color:var(--ink2);margin-bottom:6px">撮り直しされた商品</div>
+              <div style="display:flex;gap:5px;flex-wrap:wrap">${pending.map(i=>spChip(i,modalSpecial.has(i))).join('')}</div>`
+            :`<div class="thint">撮り直しされた商品はありません</div>`}
+          <button type="button" class="btn ghost sm" id="m_spMore" style="margin-top:9px">${spMoreOpen?'▲ 閉じる':'＋ 選択商品以外の再チェック'}</button>
+          ${spMoreOpen?`${others.length
+            ?`<div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:8px">${others.map(i=>spChip(i,modalSpecial.has(i))).join('')}</div>`
+            :`<div class="thint" style="margin-top:8px">他に写真チェック済みのSKUはありません</div>`}
+            <div style="display:flex;gap:8px;align-items:center;margin-top:9px">
+              <span style="font-size:12.5px;font-weight:800;color:var(--ink2)">選択した以外の個数</span>
+              <input type="number" id="m_spExtra" min="0" placeholder="0" value="${spExtra||''}" style="width:100px">
+            </div>`:''}
+        </div>`;
+        const mb=document.getElementById('m_spMore');
+        if(mb)mb.onclick=()=>{spMoreOpen=!spMoreOpen;renderSP();};
+        const se=document.getElementById('m_spExtra');
+        if(se)se.oninput=()=>{spExtra=Math.max(0,parseInt(se.value)||0);applyB();};
+        return;
+      }
+      // 撮り直し: 撮影済みSKUから選択
+      const items=srcDoneItems();
+      host.innerHTML=items.length
+        ?`<div style="background:var(--surface-2);border:1px solid var(--border);border-radius:13px;padding:10px 12px;display:flex;gap:5px;flex-wrap:wrap">
+          ${items.map(i=>spChip(i,modalSpecial.has(i))).join('')}</div>`
+        :`<div class="thint">${special.srcLabel}が済になっているSKUがまだありません</div>`;
+    };
+    box.onclick=e=>{
+      const el=e.target.closest('[data-mba],[data-mbc],[data-mbt],[data-mbi],[data-mbr],[data-mbx],[data-mbdel],[data-mbp],[data-msp]');
+      if(!el)return;
+      if(el.dataset.mbp){ // 納品待ちSKUの選択(個数に加算・記録時に納品待ちから消える)
+        const n=el.dataset.mbp;
+        modalPend.has(n)?modalPend.delete(n):modalPend.add(n);
+        renderMB();applyB();return;
+      }
+      if(el.dataset.mbdel){ // 追加SKUの取り消し(全工程の済を解除・個数のカウントには影響しない)
+        if(confirm(el.dataset.mbdel+' の追加SKUを取り消しますか？（撮影・写真チェック等の済がすべて解除されます）')){
+          extraRemove(el.dataset.mbdel);renderMB();applyB();
+        }
+        return;
+      }
+      if(el.dataset.mba){bdAll(el.dataset.mba,boardStep);renderMB();applyB();}
+      else if(el.dataset.mbc){bdClear(el.dataset.mbc,boardStep);renderMB();applyB();}
+      else if(el.dataset.mbt){mOpen[el.dataset.mbt]=!mOpen[el.dataset.mbt];renderMB();}
+      else if(el.dataset.mbi){const[s,it]=el.dataset.mbi.split('|');bdItem(s,boardStep,it);renderMB();applyB();}
+      else if(el.dataset.mbr){const n=el.dataset.mbr;modalResale.has(n)?modalResale.delete(n):modalResale.add(n);renderMB();applyB();}
+      else if(el.dataset.mbx){ // 前工程済みの追加SKUをこの工程の済に(共有・カウント反映)
+        const n=el.dataset.mbx, eh=extraStep(boardStep);
+        if(eh.checked[n]){delete eh.checked[n];recordBoardDelta(boardStep,-1,n);modalChain.delete(n);}
+        else{eh.checked[n]=true;recordBoardDelta(boardStep,1,n);modalChain.add(n);}
+        pushSetState('_extraSKU');renderMB();applyB();
+      }
+      else if(el.dataset.msp){const n=el.dataset.msp;modalSpecial.has(n)?modalSpecial.delete(n):modalSpecial.add(n);renderSP();applyB();}
+    };
+    if(scfg.url&&!boardData.fetchedAt)fetchBoard().then(()=>{renderMB();applyB();});
+    renderMB();applyB();
+  }
   document.getElementById('m_save').onclick=()=>{
     window.__modalAuto=null;
-    addRec({id:uid(),cat:a.cat,workers:a.workers.slice(),start:a.start,end,sec,reCount:autoRe||0,
-      count:t.fields.includes('count')?(parseInt(document.getElementById('m_count').value)||0):null,
-      product:t.fields.includes('product')?document.getElementById('m_product').value.trim():null,
+    let note=document.getElementById('m_note').value.trim();
+    const parts=[];
+    if(modalResale.size)parts.push('追加SKU: '+[...modalResale].join(','));
+    if(modalChain.size)parts.push('追加SKU: '+[...modalChain].join(','));
+    if(modalExtraCount>0)parts.push('追加'+modalExtraCount+(t.unit||'個'));
+    if(special&&special.field==='recheck'&&(modalSpecial.size||spExtra>0)){
+      parts.push('再チェック: '+[...modalSpecial].join(',')+(spExtra>0?((modalSpecial.size?'+':'')+'追加'+spExtra+'件'):''));
+    }else if(special&&modalSpecial.size)parts.push(special.label+': '+[...modalSpecial].join(','));
+    if(batManual||batAuto)parts.push('🔋バッテリー仕入表');
+    if(parts.length)note=(note?note+' / ':'')+parts.join(' / ');
+    // 撮影で選んだ追加SKUは「撮影済みの追加SKU」として共有記録(写真チェックの候補になる)
+    if(a.cat==='satsuei'&&modalResale.size){
+      const es=extraStep('satsuei');
+      [...modalResale].forEach(n=>es.checked[n]=true);
+      pushSetState('_extraSKU');
+    }
+    // 撮り直し選択は「再チェック待ちリスト」として共有(写真チェックの再チェック候補になる)
+    if(special&&special.field==='retake'&&modalSpecial.size){
+      const rp=retakePending();
+      [...modalSpecial].forEach(n=>rp.checked[n]=true);
+      pushSetState('_retakeSKU');
+    }
+    // 再チェックを実施した商品は再チェック待ちリストから外す
+    if(special&&special.field==='recheck'&&modalSpecial.size){
+      const rp=retakePending();let ch=false;
+      [...modalSpecial].forEach(n=>{if(rp.checked[n]){delete rp.checked[n];ch=true;}});
+      if(ch)pushSetState('_retakeSKU');
+    }
+    const spFlag=!!(special&&(spOn||modalSpecial.size||(special.field==='recheck'&&spExtra>0)));
+    const batFinal=!!(batManual||batAuto); // 付属品(バッテリー仕入表)=個数・タイムとも集計外
+    const countVal=t.fields.includes('count')?(batFinal?0:(parseInt(document.getElementById('m_count').value)||0)):null;
+    // 写真の再チェックのみの計測と付属品作業は、個数だけでなく合計タイムにも含めない
+    const noTime=(a.cat==='shashin'&&spFlag&&!(countVal>0))||batFinal;
+    // 梱包＆納品/自己配梱包: 個別選択で一部だけ納品した場合の確認と「納品待ち」への振り分け
+    if((a.cat==='nouhin'||a.cat==='jiko')&&!editRec){
+      const touched=new Set();
+      const ws=new Date(a.start).getTime(), we=Date.now()+60000;
+      boardEvents.forEach(x=>{if(x.step==='konpo'&&x.i&&x.t>=ws&&x.t<=we)touched.add(String(x.i).slice(0,3));});
+      const partials=[];
+      (boardData.groups||[]).forEach(g=>{
+        if(!touched.has(g.set))return;
+        const st=boardData.states[g.set]||{};
+        if(st.hidden||st.done)return;
+        if(a.cat==='nouhin'&&st.selfDel)return;
+        if(a.cat==='jiko'&&!st.selfDel)return;
+        const list=stepItems(g,'konpo');
+        if(!list.length)return;
+        const ss=st.steps&&st.steps.konpo;
+        const chk=list.filter(i=>ss&&(ss.all||(ss.checked&&ss.checked[i])));
+        if(chk.length>0&&chk.length<list.length)partials.push({set:g.set,left:list.filter(i=>chk.indexOf(i)<0),self:!!st.selfDel});
+      });
+      if(partials.length){
+        const msg=partials.map(p=>p.set+'〜').join('、')+' の商品が一部納品されていませんが、納品完了してよろしいですか？\n（残りのSKUは「納品待ち」として次回の納品時に表示されます）';
+        if(!confirm(msg))return;
+        const kp=koborePending();
+        partials.forEach(p=>{
+          p.left.forEach(i=>kp.items[i]=p.self?1:0);
+          const g=boardData.groups.find(x=>x.set===p.set);
+          const ss=stepState(p.set,'konpo');ss.checked=ss.checked||{};
+          g.items.forEach(i=>ss.checked[i]=true);ss.all=true;
+          afterBoardChange(p.set);
+        });
+        pushSetState('_koboreSKU');
+      }
+      // 選択した納品待ちSKUはリストから消化
+      if(modalPend.size){
+        const kp=koborePending();
+        [...modalPend].forEach(n=>delete kp.items[n]);
+        pushSetState('_koboreSKU');
+        parts.push('納品待ち消化: '+[...modalPend].join(','));
+        note=(document.getElementById('m_note').value.trim());
+        note=(note?note+' / ':'')+parts.join(' / ');
+      }
+    }
+    if(editRec){
+      // 開始/終了の時刻のみ編集(日付は元のまま)
+      const d0=isoDay(editRec.start);
+      const sv=document.getElementById('w_start').value, ev=document.getElementById('w_end').value;
+      let si=new Date(d0+'T'+sv+':00').toISOString(), ei=new Date(d0+'T'+ev+':00').toISOString();
+      if(new Date(ei)<new Date(si))ei=new Date(new Date(ei).getTime()+864e5).toISOString();
+      editRec.start=si;editRec.end=ei;editRec.sec=durSec(si,ei);
+      editRec.count=countVal;editRec.note=note;
+      if(t.fields.includes('retake'))editRec.retake=spFlag;
+      if(t.fields.includes('recheck'))editRec.recheck=spFlag;
+      editRec.noTime=(a.cat==='shashin'&&spFlag&&!(countVal>0))||batFinal;
+      editRec.bat=batFinal;
+      editRec.updatedAt=Date.now();queuePush(editRec);
+      saveState();closeModal();render();toast('保存しました');
+      if(scfg.url)setTimeout(()=>fetchChanges(true),600);
+      return;
+    }
+    addRec({id:uid(),cat:a.cat,workers:a.workers.slice(),start:a.start,end,sec,noTime:noTime,bat:batFinal,reCount:batFinal?0:(autoRe||0),
+      count:countVal,
+      product:null,
       packNo:t.fields.includes('packNo')?document.getElementById('m_packNo').value.trim():null,
       sub:null,
-      retake:t.fields.includes('retake')?document.getElementById('m_retake').checked:false,
-      recheck:t.fields.includes('recheck')?document.getElementById('m_recheck').checked:false,
-      note:document.getElementById('m_note').value.trim()});
+      retake:t.fields.includes('retake')?spFlag:false,
+      recheck:t.fields.includes('recheck')?spFlag:false,
+      note:note});
     state.active=state.active.filter(x=>x.id!==a.id);
     saveState();closeModal();render();confetti();toast(`${t.icon} ${t.label}を記録しました (${fmtDur(sec)})`);
     if(scfg.url)setTimeout(()=>fetchChanges(true),600); // 計測終了時に仕入表の変更点を取得
@@ -461,7 +812,12 @@ const fieldRow=(l,i)=>`<div class="frow"><label>${l}</label>${i}</div>`;
 
 /* ---------- 編集モーダル ---------- */
 function openEditModal(recId){
-  const r=state.records.find(x=>x.id===recId);if(!r)return;const t=ALL_TASKS[r.cat];
+  const r=state.records.find(x=>x.id===recId);if(!r)return;
+  if(['satsuei','shashin','amazon'].includes(r.cat)){
+    openStopModal({cat:r.cat,workers:r.workers.slice(),start:r.start,id:null},r);
+    return;
+  }
+  const t=ALL_TASKS[r.cat];
   const day=isoDay(r.start),startHM=fmtHM(r.start),endHM=fmtHM(r.end);
   const multi=(t.team||r.workers.length>1);
   const wsel=multi
@@ -472,6 +828,7 @@ function openEditModal(recId){
   if(t.fields.includes('packNo')) extra+=fieldRow('梱包No.',`<input type="text" id="e_packNo" value="${esc(r.packNo)}">`);
   if(t.fields.includes('sub'))    extra+=fieldRow('作業種別',`<select id="e_sub">${ZATSUMU_SUB.concat(r.sub&&!ZATSUMU_SUB.includes(r.sub)?[r.sub]:[]).map(s=>`<option ${s===r.sub?'selected':''}>${s}</option>`).join('')}</select>`);
   if(t.fields.includes('count'))  extra+=fieldRow(`${t.label}個数`,`<input type="number" id="e_count" min="0" value="${r.count??0}">`);
+  if(r.cat==='kenpin')extra+=`<div class="frow"><label class="checkrow ${r.bat?'on':''}"><input type="checkbox" id="e_bat" ${r.bat?'checked':''}> 🔋 バッテリー仕入表の検品を含む</label></div>`;
   if(t.fields.includes('retake')) extra+=`<div class="frow"><label class="checkrow ${r.retake?'on':''}"><input type="checkbox" id="e_retake" ${r.retake?'checked':''}> 撮り直し</label></div>`;
   if(t.fields.includes('recheck'))extra+=`<div class="frow"><label class="checkrow ${r.recheck?'on':''}"><input type="checkbox" id="e_recheck" ${r.recheck?'checked':''}> 再チェック（2回目以降）</label></div>`;
   const timeFields=t.timed
@@ -487,6 +844,11 @@ function openEditModal(recId){
   if(multi)box.querySelectorAll('#e_workers .chip').forEach(c=>c.onclick=()=>c.classList.toggle('on'));
   ['e_retake','e_recheck'].forEach(id=>{const cb=document.getElementById(id);
     if(cb)cb.onchange=()=>cb.closest('.checkrow').classList.toggle('on',cb.checked);});
+  const eBat=document.getElementById('e_bat');
+  const eBatSync=()=>{const ec=document.getElementById('e_count');if(!ec||!eBat)return;
+    if(eBat.checked){ec.value='';ec.disabled=true;ec.style.background='var(--surface-2)';ec.style.color='var(--muted)';ec.placeholder='計測不要';}
+    else{ec.disabled=false;ec.style.background='';ec.style.color='';ec.placeholder='0';}};
+  if(eBat){eBat.onchange=()=>{eBat.closest('.checkrow').classList.toggle('on',eBat.checked);eBatSync();};eBatSync();}
   document.getElementById('e_del').onclick=()=>{if(confirm('この記録を削除しますか？')){state.records=state.records.filter(x=>x.id!==recId);pushDelete(recId);saveState();closeModal();render();toast('削除しました');}};
   document.getElementById('e_save').onclick=()=>{
     const d=document.getElementById('e_date').value;
@@ -505,12 +867,307 @@ function openEditModal(recId){
     if(t.fields.includes('packNo')) r.packNo=document.getElementById('e_packNo').value.trim();
     if(t.fields.includes('sub'))    r.sub=document.getElementById('e_sub').value;
     if(t.fields.includes('count'))  r.count=parseInt(document.getElementById('e_count').value)||0;
+    const eBat2=document.getElementById('e_bat');
+    if(eBat2){r.bat=eBat2.checked;r.noTime=!!eBat2.checked;if(eBat2.checked){r.count=0;r.reCount=0;}}
     if(t.fields.includes('retake')) r.retake=document.getElementById('e_retake').checked;
     if(t.fields.includes('recheck'))r.recheck=document.getElementById('e_recheck').checked;
     r.note=document.getElementById('e_note').value.trim();
     r.updatedAt=Date.now();queuePush(r);
     saveState();closeModal();render();toast('保存しました');
   };
+}
+
+/* ============================================================
+   備品チェックリスト
+   データは納品進捗と同じ仕組み(_納品進捗シートのキー _bihin)で全PC共有
+   ============================================================ */
+const BIHIN_SEED=[
+  {n:'付箋（小）',need:'3',cur:'3',line:'1'},
+  {n:'付箋（大）',need:'5',cur:'3',line:'2'},
+  {n:'クリアパック（80-250）',need:'4',cur:'5',line:'1'},
+  {n:'クリアパック（L判）',need:'8',cur:'9',line:'2'},
+  {n:'クリアパック（A6）',need:'8',cur:'9',line:'2'},
+  {n:'クリアパック（B5）',need:'2',cur:'4',line:'1'},
+  {n:'クリアパック（A5）',need:'2',cur:'9',line:'1'},
+  {n:'クリアパック（2L判）',need:'8',cur:'7',line:'2'},
+  {n:'クリアパック（58-90）',need:'8',cur:'10',line:'2'},
+  {n:'ケーブル（B）',need:'20',cur:'23',line:'10'},
+  {n:'ケーブル（C）',need:'20',cur:'18',line:'10'},
+  {n:'ウェットティッシュ',need:'2',cur:'7',line:'2'},
+  {n:'レンズクリーニングキット',need:'2',cur:'2',line:'1'},
+  {n:'シルボン紙',need:'1',cur:'1',line:'1'},
+  {n:'緩衝材（紙）',note:'そろそろなくなります。'},
+  {n:'マスキングテープ',need:'2',cur:'2',line:'1'},
+  {n:'バリバリテープ',need:'5',cur:'46',line:'1'},
+  {n:'綿棒',need:'2',cur:'6',line:'1'},
+  {n:'爪楊枝',need:'2',cur:'3',line:'1'},
+  {n:'リタッチペン',need:'1',cur:'1',line:'1'},
+  {n:'結束バンド',need:'3',cur:'3',line:'1'},
+  {n:'プチプチ',need:'1',note:'補充したときにラスト1個だったら報告。'},
+  {n:'宅急便コンパクト',need:'10',cur:'17',line:'5'},
+  {n:'段ボール（40サイズ）',need:'30(3束)'},
+  {n:'段ボール（60サイズ）',need:'30(3束)'},
+  {n:'段ボール（80サイズ）',need:'30(3束)'},
+  {n:'段ボール（80サイズ横長）',need:'20(2束)'},
+  {n:'段ボール（140サイズ）',need:'2'},
+  {n:'カッターナイフ',need:'2'},
+  {n:'ペーパータオル',need:'4',cur:'2',line:'1セット'},
+  {n:'ティッシュペーパー',need:'5',cur:'9',line:'1セット'},
+  {n:'トイレットペーパー',need:'3',cur:'7',line:'1セット'},
+  {n:'セロハンテープ',need:'5',cur:'73',line:'1セット'},
+  {n:'ホッチキスの芯',need:'1',cur:'2',line:'1'},
+  {n:'歯ブラシ',need:'1',cur:'2',line:'1'},
+  {n:'油性ペン',need:'1',cur:'3',line:'1'},
+  {n:'スライム',need:'1',cur:'3',line:'1'},
+  {n:'流せるトイレブラシ',need:'1',cur:'2',line:'1'},
+  {n:'ハンドソープ',need:'1',cur:'1',line:'1'},
+  {n:'塩分タブレット',need:'2袋',cur:'4袋',line:'2袋',note:'ラスト2袋になったら味も教えてください'},
+];
+function bihinGet(){
+  // サーバー共有分とこのPCの保存分のうち「新しい方」を使う
+  // (取得タイミングによって✏編集などが古いデータに巻き戻るのを防ぐ)
+  const s=boardData.states&&boardData.states['_bihin'];
+  let c=null;try{c=JSON.parse(localStorage.getItem('worktimer_bihin'));}catch(e){}
+  if(s&&s.items&&c&&c.items)return (c.updatedAt||0)>(s.updatedAt||0)?c:s;
+  if(s&&s.items)return s;
+  if(c&&c.items)return c;
+  return {items:BIHIN_SEED.map((x,i)=>({id:'b'+(i+1),n:x.n,need:x.need||'',cur:x.cur||'',line:x.line||'',note:x.note||'',done:false}))};
+}
+function bihinSave(d){
+  d.updatedAt=Date.now();
+  boardData.states['_bihin']=d;
+  try{localStorage.setItem('worktimer_bihin',JSON.stringify(d));}catch(e){}
+  pushSetState('_bihin');
+}
+function bhNum(x){const m=String(x==null?'':x).match(/\d+(?:\.\d+)?/);return m?parseFloat(m[0]):null;}
+/* 購入数: 今の在庫が補充ライン以下 → 常備数-今の在庫。判定できない項目は null */
+function bihinBuy(it){
+  const c=bhNum(it.cur),l=bhNum(it.line),n=bhNum(it.need);
+  if(c==null||l==null||n==null)return null;
+  return c<=l?Math.max(0,n-c):0;
+}
+let bihinFilter=false, bihinWantFetch=true;
+function viewBihin(){
+  // タブを開いた時に他PCの最新入力を自動取得(ボタン不要)
+  if(scfg.url&&bihinWantFetch){bihinWantFetch=false;fetchBoard().then(()=>{if(route.page==='bihin')render();});}
+  const d=bihinGet();
+  const needList=d.items.filter(it=>{const b=bihinBuy(it);return b!=null&&b>0&&!it.done;});
+  const needBuy=needList.length;
+  const th=t=>`<th style="padding:8px 8px;font-size:12px;color:var(--muted);border-bottom:2px solid var(--border);text-align:center;white-space:nowrap">${t}</th>`;
+  const td=(c,st='')=>`<td style="padding:6px 8px;border-bottom:1px solid var(--border);text-align:center;${st}">${c}</td>`;
+  const shown=bihinFilter?needList:d.items;
+  const rows=shown.map(it=>{
+    const buy=bihinBuy(it);
+    const alert=buy!=null&&buy>0&&!it.done;
+    const bg=it.done?'color-mix(in srgb,var(--good) 8%,transparent)':(alert?'color-mix(in srgb,var(--crit) 7%,transparent)':'');
+    return `<tr style="background:${bg}">
+      ${td(`<b>${esc(it.n)}</b>`,'text-align:left;min-width:150px;white-space:nowrap')}
+      ${td(esc(it.need||'—'))}
+      ${td(`<input data-bh-cur="${it.id}" value="${esc(it.cur||'')}" style="width:74px;text-align:center;padding:7px 4px">`)}
+      ${td(esc(it.line||'—'))}
+      ${td(buy==null?'<span style="color:var(--muted)">—</span>':(buy>0?`<b style="color:var(--crit);font-size:16px">${buy}</b>`:'<span style="color:var(--good);font-weight:800">OK</span>'))}
+      ${td(it.done
+        ?`<button class="btn sm" data-bh-done="${it.id}" style="background:var(--good);color:#fff;border:none;min-width:118px">✓ 補充済</button>`
+        :`<button class="btn ghost sm" data-bh-done="${it.id}" style="min-width:118px">補充したら押す</button>`)}
+      ${td(`<input data-bh-note="${it.id}" value="${esc(it.note||'')}" style="width:100%;min-width:160px;padding:7px 8px;font-size:12.5px">`,'text-align:left')}
+      ${td(`<button class="mini" data-bh-edit="${it.id}" title="品目を編集">✏</button>`)}
+    </tr>`;
+  }).join('');
+  return `<div class="card">
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+      <h2 style="margin:0">🧰 備品チェックリスト</h2>
+      ${needBuy?`<span class="tag" style="color:var(--crit);font-weight:900;border-color:var(--crit)">🛒 購入が必要: ${needBuy}品</span>`:`<span class="tag" style="color:var(--good)">✅ 補充が必要な備品はありません</span>`}
+      ${d.updatedAt?`<span class="tag">${fmtDate(new Date(d.updatedAt).toISOString())} ${fmtHM(new Date(d.updatedAt).toISOString())} 更新</span>`:''}
+      <div style="margin-left:auto;display:flex;gap:6px;flex-wrap:wrap">
+        <button class="btn ${bihinFilter?'primary':'ghost'} sm" id="bh_filter">🛒 補充が必要な品のみ${bihinFilter?' ✓':''}</button>
+        <button class="btn ghost sm" id="bh_export">📱 購入リストを出力</button>
+        <button class="btn ghost sm" id="bh_add">＋ 品目を追加</button>
+        <button class="btn ghost sm" id="bh_clear">🧹 在庫の入力を全クリア</button>
+        <button class="btn ghost sm" id="bh_reset">↺ 補充済をリセット</button></div></div>
+    <div class="sub" style="margin-top:3px">在庫チェックの時に「今の在庫」を入力してください。ラインまで減った品は購入数が自動で入ります。数が大量にあるものは個数チェック不要。リストにない品は「＋品目を追加」</div>
+    <div style="overflow-x:auto;margin-top:10px"><table style="border-collapse:collapse;width:100%;min-width:780px">
+      <tr>${th('品名')}${th('常備数<br><span style="font-weight:400">持っておきたい数</span>')}${th('今の在庫<br><span style="font-weight:400">チェック時に入力</span>')}${th('補充ライン<br><span style="font-weight:400">この数以下で購入</span>')}${th('購入数<br><span style="font-weight:400">自動計算</span>')}${th('補充済')}${th('備考')}${th('')}</tr>
+      ${rows||`<tr><td colspan="8" style="padding:16px;text-align:center;color:var(--muted)">補充が必要な品はありません 🎉</td></tr>`}
+    </table></div></div>`;
+}
+/* 購入リストの出力(スマホ閲覧用テキスト。コピーしてLINE等に貼れる) */
+function openBihinExport(){
+  const d=bihinGet();
+  const need=d.items.filter(it=>{const b=bihinBuy(it);return b!=null&&b>0&&!it.done;});
+  const dt=new Date();
+  const lines=[`🛒 備品購入リスト（${dt.getMonth()+1}/${dt.getDate()}）`,''];
+  if(need.length)need.forEach(it=>{lines.push(`・${it.n} × ${bihinBuy(it)}${it.note?`（${it.note}）`:''}`);});
+  else lines.push('購入が必要な品はありません');
+  const text=lines.join('\n');
+  const box=document.getElementById('modalBox');
+  box.innerHTML=`<h3>📱 購入リスト</h3>
+    <div class="sub">コピーしてLINEやメモに貼り付ければスマホで見られます</div>
+    <textarea id="bh_extext" style="width:100%;height:${Math.min(320,80+need.length*24)}px;font-size:14px;line-height:1.8" readonly>${esc(text)}</textarea>
+    <div class="modal-acts"><button class="btn ghost" onclick="closeModal()">閉じる</button>
+    <button class="btn primary" id="bh_copy">📋 コピー</button></div>`;
+  showModal();
+  document.getElementById('bh_copy').onclick=()=>{
+    const ta=document.getElementById('bh_extext');
+    ta.select();ta.setSelectionRange(0,999999);
+    const done=()=>toast('コピーしました。LINEやメモに貼り付けてください');
+    if(navigator.clipboard&&navigator.clipboard.writeText)navigator.clipboard.writeText(text).then(done).catch(()=>{document.execCommand('copy');done();});
+    else{document.execCommand('copy');done();}
+  };
+}
+function openBihinEdit(id){
+  const d=bihinGet();
+  const it=id?d.items.find(x=>x.id===id):null;
+  const box=document.getElementById('modalBox');
+  box.innerHTML=`<h3>🧰 品目を${it?'編集':'追加'}</h3>
+    ${fieldRow('品名',`<input type="text" id="bi_n" value="${it?esc(it.n):''}" placeholder="例: ガムテープ">`)}
+    ${fieldRow('常備数（持っておきたい数）',`<input type="text" id="bi_need" value="${it?esc(it.need):''}" placeholder="例: 3">`)}
+    ${fieldRow('補充ライン（この数以下になったら購入）',`<input type="text" id="bi_line" value="${it?esc(it.line):''}" placeholder="例: 1">`)}
+    ${fieldRow('今の在庫',`<input type="text" id="bi_cur" value="${it?esc(it.cur):''}" placeholder="例: 2">`)}
+    <div class="modal-acts">${it?'<button class="btn danger sm" id="bi_del">削除</button>':''}
+      <button class="btn ghost" onclick="closeModal()">戻る</button>
+      <button class="btn primary" id="bi_save">${it?'保存':'追加する'}</button></div>`;
+  showModal();
+  const del=document.getElementById('bi_del');
+  if(del)del.onclick=()=>{if(confirm('「'+it.n+'」をリストから削除しますか？')){
+    d.items=d.items.filter(x=>x.id!==id);bihinSave(d);closeModal();render();toast('削除しました');}};
+  document.getElementById('bi_save').onclick=()=>{
+    const n=document.getElementById('bi_n').value.trim();
+    if(!n){toast('品名を入力してください');return;}
+    const vals={n,need:document.getElementById('bi_need').value.trim(),line:document.getElementById('bi_line').value.trim(),cur:document.getElementById('bi_cur').value.trim()};
+    if(it)Object.assign(it,vals);
+    else d.items.push({id:uid(),...vals,note:'',done:false});
+    bihinSave(d);closeModal();render();toast(it?'保存しました':'追加しました');
+  };
+}
+
+/* ============================================================
+   管理者ページのロック(パスワード) / アプリ内マニュアル
+   パスワードは全PC共通(納品進捗の共有シート経由)。
+   忘れた時は仕入表メニュー「作業担当割当 → 🔑 管理者パスワード初期化」
+   ============================================================ */
+function pwHash(s){let h=5381;s='wtpw|'+String(s);for(let i=0;i<s.length;i++)h=((h<<5)+h+s.charCodeAt(i))>>>0;return 'h'+h.toString(36);}
+function adminPwGet(){
+  if(boardData.fetchedAt){const s=boardData.states&&boardData.states['_adminPW'];return (s&&s.h)?s.h:null;}
+  try{return localStorage.getItem('worktimer_admpw')||null;}catch(e){return null;}
+}
+function adminPwSave(hash){
+  boardData.states['_adminPW']={h:hash};
+  pushSetState('_adminPW');
+  try{localStorage.setItem('worktimer_admpw',hash);}catch(e){}
+}
+function adminUnlocked(){
+  try{return sessionStorage.getItem('wt_adm')==='1'||localStorage.getItem('worktimer_adm_skip')==='1';}catch(e){return true;}
+}
+function viewAdminLock(){
+  if(scfg.url&&!boardData.fetchedAt)fetchBoard().then(()=>{if(route.page==='admin'&&!adminUnlocked())render();});
+  const h=adminPwGet();
+  if(!h)return `<div class="card" style="max-width:520px;margin:0 auto"><h2>🔒 管理者ページ</h2>
+    <div class="sub">はじめに管理者パスワードを設定してください（全PC共通で使えます）</div>
+    ${fieldRow('新しいパスワード','<input type="password" id="al_pw1" placeholder="パスワード">')}
+    ${fieldRow('もう一度入力','<input type="password" id="al_pw2" placeholder="確認">')}
+    <button class="btn primary" id="al_set" style="width:100%">設定して開く</button></div>`;
+  return `<div class="card" style="max-width:520px;margin:0 auto"><h2>🔒 管理者ページ</h2>
+    <div class="sub">パスワードを入力してください</div>
+    ${fieldRow('パスワード','<input type="password" id="al_pw" placeholder="パスワード">')}
+    <label class="checkrow" style="margin-bottom:12px"><input type="checkbox" id="al_skip"> このPCでは次回から入力を省略</label>
+    <button class="btn primary" id="al_ok" style="width:100%">開く</button>
+    <div class="thint" style="margin-top:10px">パスワードを忘れた場合: 仕入表のメニュー「作業担当割当 → 🔑 管理者パスワード初期化」で初期化 → ここで新しいパスワードを設定し直せます</div></div>`;
+}
+function adminSetPw(){
+  const p1=document.getElementById('al_pw1').value,p2=document.getElementById('al_pw2').value;
+  if(!p1){toast('パスワードを入力してください');return;}
+  if(p1!==p2){toast('確認用パスワードが一致しません');return;}
+  adminPwSave(pwHash(p1));
+  try{sessionStorage.setItem('wt_adm','1');}catch(e){}
+  render();toast('パスワードを設定しました');
+}
+function adminTryUnlock(){
+  const v=document.getElementById('al_pw').value;
+  if(pwHash(v)!==adminPwGet()){toast('パスワードが違います');return;}
+  try{sessionStorage.setItem('wt_adm','1');
+    if(document.getElementById('al_skip').checked)localStorage.setItem('worktimer_adm_skip','1');}catch(e){}
+  render();
+}
+function openAdminPwChange(){
+  const box=document.getElementById('modalBox');
+  box.innerHTML=`<h3>🔑 管理者パスワード変更</h3>
+    ${fieldRow('現在のパスワード','<input type="password" id="ap_cur">')}
+    ${fieldRow('新しいパスワード','<input type="password" id="ap_n1">')}
+    ${fieldRow('もう一度入力','<input type="password" id="ap_n2">')}
+    <div class="modal-acts"><button class="btn ghost" onclick="closeModal()">戻る</button>
+    <button class="btn primary" id="ap_save">変更する</button></div>`;
+  showModal();
+  document.getElementById('ap_save').onclick=()=>{
+    if(pwHash(document.getElementById('ap_cur').value)!==adminPwGet()){toast('現在のパスワードが違います');return;}
+    const n1=document.getElementById('ap_n1').value,n2=document.getElementById('ap_n2').value;
+    if(!n1){toast('新しいパスワードを入力してください');return;}
+    if(n1!==n2){toast('確認用パスワードが一致しません');return;}
+    adminPwSave(pwHash(n1));closeModal();toast('パスワードを変更しました');
+  };
+}
+/* --- アプリ内マニュアル --- */
+const MAN_CSS=`max-height:66vh;overflow:auto;padding-right:8px;font-size:13.5px;line-height:1.85`;
+const manH=t=>`<div style="font-weight:900;font-size:14.5px;color:var(--grad-a);margin:16px 0 4px;border-left:4px solid var(--grad-a);padding-left:8px">${t}</div>`;
+const manB=t=>`<div style="background:var(--surface-2);border:1px solid var(--border);border-radius:11px;padding:9px 13px;margin:6px 0">${t}</div>`;
+function openStaffManual(){
+  const box=document.getElementById('modalBox');
+  box.innerHTML=`<h3>📖 使い方マニュアル</h3><div style="${MAN_CSS}">
+    ${manH('1. 朝イチにやること')}
+    ${manB('仕入表(スプレッドシート)のメニュー<b>「作業担当割当」</b>から自分の名前をクリック。担当は毎日0時に自動解除されるので毎朝設定してください。PC交代時は選び直せばOK。')}
+    ${manH('2. タイマーの基本')}
+    ${manB('自分のタブ → 作業カードの<b>「▶ 開始」</b> → 終わったら<b>「■ 終了して記録」</b> → 内容を確認して<b>「記録する」</b>。<br>間違えて開始した時は「✕ 取り消し」。16時以降にアプリを開くと押し忘れタイマーは16:00で自動記録されます。')}
+    ${manH('3. 検品 🔍')}
+    ${manB('個数は仕入表の色塗りから自動入力。合わない時は「↻ 再集計」か手修正。<br>🔋 <b>バッテリー仕入表の検品</b>をする時は、開始前に「☐ バッテリー仕入表検品」をタップして☑にしてから開始。忘れた時は終了画面の「🔋 バッテリー仕入表の検品を含む」ボタンでもOK(もう一度押すと解除)。')}
+    ${manH('4. 撮影 📷')}
+    ${manB('終了画面で納品セットを「✓ 全て完了」か「個別選択」でチェック → 個数が自動で入る。<br>セット外の商品は「＋ 別のSKUを追加」。撮り直しは作業時間右の「🔁 撮り直し」から対象SKUを選択。')}
+    ${manH('5. 写真チェック 🖼 / Amazon画像貼付 🏷')}
+    ${manB('写真チェックには撮影済みのSKU、Amazon貼付には写真チェック済みのSKUだけが表示されます。操作は撮影と同じ。<br>2回目以降のチェックは「🔁 再チェック」から(撮り直しされた商品が自動で出ます)。')}
+    ${manH('6. 全員作業 👥（梱包＆納品・自己配梱包）')}
+    ${manB('先に<b>参加者全員を選択</b>してから開始。終了画面で梱包したセットをチェック。<br>一部だけ納品した場合、残りは「納品待ち」として次回の終了画面に出るので、納品した時に選択して消化してください。')}
+    ${manH('7. 雑務 🗂')}
+    ${manB('タイマーなし。やった作業のボタンをタップするだけ。')}
+    ${manH('8. 納品進捗ボード 📦（ホーム）')}
+    ${manB('チェックは全PCで共有。「✓ 全て完了 / 個別に選択」で工程を進め、間違えたら「↺ 全て解除」。<br>自己配のセットには「自己配送」ボタンをON。集荷依頼は<b>14時まで</b>にかけて「🚚 集荷依頼済みにする」を押す。<br>全工程完了でセットは消えます(「集荷完了一覧」「自己配完了一覧」から確認・修正可)。🔋マークはバッテリー仕入表のセットです。<br><span style="color:var(--crit);font-weight:800">警告は画面右上の「⚠ 警告」ボタンに表示されます。</span>必ず確認して、対応が済んだら「✓ 解除」を押してください(問題が直れば自動でも消えます)。')}
+    ${manH('9. 記録の詳細・修正・削除')}
+    ${manB('記録のカードを<b>タップすると詳細</b>(その計測でのチェック操作や仕入表の変更内容)が確認できます。✎ボタンで時刻・個数の修正や削除。修正は全PCに共有されます。<br>仕入表の変更点は<b>日付ごと</b>にまとまっています。日付をタップすると開閉できます(今日の分は最初から開いています)。')}
+    ${manH('10. 備品チェックリスト 🧰')}
+    ${manB('在庫チェックの時に「🧰 備品」タブで<b>「今の在庫」を入力</b>してください(チェック前に「🧹 在庫の入力を全クリア」を押すと空欄から入力できます)。補充ラインまで減った品は購入数が自動で赤く表示されます。<br>買い出しの時は<b>「🛒 補充が必要な品のみ」</b>で絞り込み、<b>「📱 購入リストを出力」→コピー</b>でLINEやメモに貼ればスマホで見られます。<br>買ってきて補充したら<b>「補充したら押す」</b>をタップ(個数のカウントは不要)。数が大量にあるものは個数チェック不要。リストにない品は「＋品目を追加」、気づいたことは備考欄へ。')}
+    ${manH('11. 困ったとき')}
+    ${manB('・個数が入らない → 「↻ 再集計」<br>・表示がおかしい → Ctrl+F5 で更新<br>・「接続エラー」 → しばらく待つと自動再接続。続く場合は管理者へ<br>・操作ミス → 「全て解除」「取り消し」「もう一度タップ」で戻せます')}
+  </div>
+  <div class="modal-acts"><button class="btn primary" onclick="closeModal()">閉じる</button></div>`;
+  showModal();
+}
+function openAdminManual(){
+  const box=document.getElementById('modalBox');
+  box.innerHTML=`<h3>📕 管理者マニュアル（設定・仕様）</h3><div style="${MAN_CSS}">
+    ${manH('1. 全体構成')}
+    ${manB('<b>アプリ本体</b>: work-app.html(GitHub Pages) / <b>サーバー</b>: 2026年仕入管理表内のGAS(仕入表連携.gs)が変更ログ・担当割当・記録同期・納品進捗を全て担当 / <b>バッテリー仕入表</b>: GASが読み取り専用で参照(何も入れない)。')}
+    ${manH('2. アプリの更新')}
+    ${manB('GitHubのリポジトリ work-app → Add file → Upload files で work-app.html を上書き → Commit → 各PCで Ctrl+F5。URLは不変。バージョンは「仕入表連携」タブ右上のタグで確認。')}
+    ${manH('3. GASの更新')}
+    ${manB('コード貼り替え → 保存 → <b>デプロイを管理 → ✏ → 新バージョン → デプロイ</b>(URL不変)。⚠「新しいデプロイ」はURLが変わるので使わない。初回のみ: setupAll実行 → ウェブアプリとしてデプロイ → URLをアプリに設定。')}
+    ${manH('4. CONFIG(コード冒頭)')}
+    ${manB('SHEET_NAME=監視タブ / BATTERY_ID=バッテリー仕入表のID(空で連動OFF) / BATTERY_SHEET=タブ名(空=先頭) / BATTERY_COL=2(B列)。')}
+    ${manH('5. 変更ログの監視ルール(メインシートのみ)')}
+    ${manB('B列色変更(灰→色=検品1個・同一No.1日1回 / 赤→他色=再検品・P列「未検品」なら通常カウント) / E・F・Q・R手修正 / H売値=要確認 / I仕入額+V列10分警告 / J〜N(なし除外・コンディション集約) / 状態・外観〜光学は既存値変更のみ「修正」行 / O・P前後表示 / S管理番号 / 行増減。同一商品は1行に連結、時刻クリックで履歴。チェックは読み取り時45秒スロットル+30分毎バックアップ。管理者PCの編集は記録されない。<br>表示は<b>直近7日分</b>(日付ごとに折りたたみ・今日は初期展開)。ログ本体は<b>14日で自動削除</b>(毎日0時)。管理者ページ・仕入表連携タブは作業者ボタンで絞り込み可。記録カードをタップすると、その計測時間内の変更点・チェック操作の詳細が見られる。')}
+    ${manH('6. バッテリー仕入表連携')}
+    ${manB('B列の管理番号と色だけを読む: <b>黄=納品 / 赤=自己配(全部赤で自己配送 自動ON) / 白=対象外</b>(半数以上白→残りは再出品扱い)。納品進捗ボードにのみ反映(変更ログ・検品カウント対象外)。ボードでは🔋+「バッテリー」タグ。負荷はボード取得時+0.5〜1秒のみ。権限は管理者アカウントがファイルを開ければOK(スタッフ側の作業・認証なし)。')}
+    ${manH('7. 集計除外ルール')}
+    ${manB('以下は<b>個数・タイムとも全集計(合計・月平均・分/個)から除外</b>。記録は残り備考にマーカーが付く:<br>・🔋バッテリー仕入表: 検品=「☑バッテリー仕入表検品」で開始 or 終了画面の🔋ボタン選択(メイン混在の計測もまるごと除外) / 撮影〜自己配梱包=バッテリーセット(先頭3桁)を選択した計測(自動判定)<br>・再チェックのみ(個数0)の写真チェック<br>※撮り直しは個数に入らないがタイムは通常集計。再検品は別枠件数。')}
+    ${manH('8. 納品進捗ボード仕様')}
+    ${manB('メインシートはS列管理番号のうちB列が黄・緑・柿の行のみを先頭3桁でセット化。工程順: 撮影→写真チェック→Amazon貼付→梱包→集荷依頼(後工程は前工程済みSKUのみ選択可・Amazonは納品後も可)。自己配送はAmazon・集荷を省略。一部納品→「納品待ち」として次回消化。警告: 集荷待ち/前日持ち越し/工程逆転/納品待ち残。状態は _納品進捗 シートで全PC共有。')}
+    ${manH('9. 管理者パスワード')}
+    ${manB('全PC共通(納品進捗の共有の仕組みで同期)。変更はダッシュボードの「🔑 パスワード変更」。<b>忘れた場合</b>: 仕入表メニュー「作業担当割当 → 🔑 管理者パスワード初期化」→ アプリの管理者ページで新規設定。「🔒 ロック」でこのPCの入力省略も解除されます。')}
+    ${manH('9.5 備品チェックリスト')}
+    ${manB('データは納品進捗と同じ共有シート(_納品進捗のキー _bihin)で全PC同期。列: 常備数(持っておきたい数)/今の在庫(スタッフ入力)/補充ライン(この数以下で購入)/購入数=在庫がライン以下の時に「常備数-在庫」を自動計算。品目の追加・編集・削除は✏と「＋品目を追加」。在庫を入力し直すと補充済チェックは自動で外れる。「↺補充済をリセット」で一括解除。数値が読めない項目(空欄など)の購入数は「—」表示。')}
+    ${manH('10. 隠しシート(編集禁止)')}
+    ${manB('変更ログ / 担当設定 / _snapshot / _pending / _記録同期 / _納品進捗。表示→非表示のシートから確認可能。')}
+    ${manH('11. トラブルシューティング')}
+    ${manB('・接続エラー → 「仕入表連携」タブの🩺詳細診断(①fetch ②script ③変更点 ④ボード+色内訳)<br>・「サーバーが旧バージョン」→ GASの新バージョンデプロイ忘れ<br>・バッテリーのセットが出ない → 診断④で「B:黄/B:赤」を確認。0なら色と管理番号、「B:エラー」ならBATTERY_IDと権限<br>・自動個数が合わない → ↻再集計。同一No.1日1個ルールに注意<br>・「担当者未設定」→ そのPCの朝の担当割当忘れ')}
+  </div>
+  <div class="modal-acts"><button class="btn primary" onclick="closeModal()">閉じる</button></div>`;
+  showModal();
 }
 
 /* ---------- modal / toast ---------- */
@@ -549,7 +1206,7 @@ function monthlyAvgTable(recs,cats){
   const rows=months.map(mk=>{const mrecs=recs.filter(r=>monthKey(r.start)===mk);
     const cells=cats.map(c=>{const t=ALL_TASKS[c];const a=avgFor(mrecs.filter(r=>r.cat===c),t);
       return `<td style="font-variant-numeric:tabular-nums;font-weight:800">${a?a.v:'<span style="color:var(--muted);font-weight:400">—</span>'}</td>`;}).join('');
-    const tot=mrecs.reduce((s,r)=>s+r.sec,0);
+    const tot=mrecs.reduce((s,r)=>s+effSec(r),0);
     return `<tr ${mk===cur?'style="background:color-mix(in srgb,var(--grad-a) 8%,transparent)"':''}>
       <td style="font-weight:900;white-space:nowrap">${monthLabel(mk)}${mk===cur?' <span class="tag">今月</span>':''}</td>${cells}
       <td style="font-variant-numeric:tabular-nums">${fmtDurShort(tot)}</td></tr>`;}).join('');
@@ -561,7 +1218,7 @@ function monthlyAvgTable(recs,cats){
    ============================================================ */
 function render(){
   renderTabs();const v=document.getElementById('view');
-  v.innerHTML=({home:viewHome,worker:()=>viewWorker(route.worker),team:viewTeam,admin:viewAdmin,shiire:viewShiire}[route.page]||viewHome)();
+  v.innerHTML=({home:viewHome,worker:()=>viewWorker(route.worker),team:viewTeam,bihin:viewBihin,admin:()=>adminUnlocked()?viewAdmin():viewAdminLock(),shiire:viewShiire}[route.page]||viewHome)();
   bindView();
 }
 
@@ -574,7 +1231,9 @@ function viewHome(){
       <div class="avatar round" style="--ac:${wcol(w)}">${w.slice(0,1)}</div>
       <div><div class="name">${w}</div>${runHtml}</div><div class="chev">›</div></div></div>`;}).join('');
   const teamRun=state.active.filter(a=>ALL_TASKS[a.cat].team);
-  return `<div class="section-title">👤 個人ページ <span class="tag">検品・撮影・写真チェック・Amazon貼付・雑務</span></div>
+  return `<div class="section-title">📦 納品進捗 <span class="tag">集荷依頼まで管理</span></div>
+    <div class="card" style="margin-top:6px" data-board>${boardHtml()}</div>
+    <div class="section-title">👤 個人ページ <span class="tag">検品・撮影・写真チェック・Amazon貼付・雑務</span></div>
     <div class="grid cols3">${cards}</div>
     <div class="section-title">👥 チーム・管理</div>
     <div class="grid cols2">
@@ -589,7 +1248,7 @@ function viewHome(){
 function viewTodaySummary(){
   const td=todayStr(),recs=state.records.filter(r=>isoDay(r.start)===td&&known(r));
   if(!recs.length&&!state.active.length)return `<div class="info" style="margin-top:22px">💡 計測する作業は大きなボタンで<b>ワンタップ開始 → もう一度で終了＆記録</b>。雑務は種別を<b>タップするだけで記録</b>(時間計測なし)。押し間違えても編集・削除・取り消しができます。まずは管理者ページの「サンプルデータ投入」で表示を確認できます。</div>`;
-  const total=recs.filter(r=>ALL_TASKS[r.cat].timed).reduce((s,r)=>s+r.sec,0);
+  const total=recs.filter(r=>ALL_TASKS[r.cat].timed).reduce((s,r)=>s+effSec(r),0);
   return `<div class="card" style="margin-top:22px"><h2>本日の状況</h2>
     <div class="sub">${new Date().toLocaleDateString('ja-JP',{month:'long',day:'numeric',weekday:'short'})}</div>
     <div class="stats">
@@ -605,8 +1264,8 @@ function viewWorker(w){
   const td=todayStr();
   const recs=state.records.filter(r=>r.workers.includes(w)&&known(r)).sort((a,b)=>new Date(b.start)-new Date(a.start));
   const today=recs.filter(r=>isoDay(r.start)===td);
-  const todayTotal=today.filter(r=>ALL_TASKS[r.cat].timed).reduce((s,r)=>s+r.sec,0);
-  const cats=['kenpin','satsuei','shashin','amazon','nouhin','zatsumu'];
+  const todayTotal=today.filter(r=>ALL_TASKS[r.cat].timed).reduce((s,r)=>s+effSec(r),0);
+  const cats=['kenpin','satsuei','shashin','amazon','nouhin','jiko','zatsumu'];
   return `<div class="card hero" style="--wc:${wcol(w)}"><div class="row">
       <div class="avatar round" style="--ac:${wcol(w)}">${w.slice(0,1)}</div>
       <div><h2>${w}</h2><div class="chips-inline">
@@ -617,20 +1276,24 @@ function viewWorker(w){
     ${changesCard(false,w)}
     <div class="card"><h2>📊 今月の平均タイム</h2><div class="sub">${monthLabel(thisMonthKey())}・${w}</div>${thisMonthAvgStats(recs,cats)}</div>
     <div class="card"><h2>🗓 本日のタイムスケジュール</h2><div class="sub">時系列で表示。タップで編集・削除・備考</div>${timeline(today)}</div>
-    <div class="card"><h2>📅 月別 平均タイム</h2><div class="sub">1個あたり/1回あたりの平均。雑務は件数。今月を強調</div>${monthlyAvgTable(recs,cats)}</div>
+    <div class="card"><h2>📅 月別 平均タイム</h2>${monthlyAvgTable(recs,cats)}</div>
     ${recs.length>today.length?`<div class="card"><h2>これまでの記録</h2>${recListHtml(recs.filter(r=>isoDay(r.start)!==td).slice(0,40))}</div>`:''}`;
 }
 
 /* ---------- task tile ---------- */
+let batKenpinSel={}; // ☑バッテリー仕入表検品 の選択状態(開始で消費)
 function taskTile(cat,t,workers){
   const wkey=workers.slice().sort().join(','),a=findActive(cat,wkey);
+  const batSel=cat==='kenpin'&&!!batKenpinSel[wkey];
   return `<div class="task-tile ${a?'active':''}" style="--tc:${tcolor(t.cvar)}">
     <div class="thead"><div class="tile-ic">${t.icon}</div><span class="tname">${t.label}</span>
+      ${a&&a.batStart?'<span class="tag" style="color:var(--satsuei);font-weight:800">🔋バッテリー仕入表</span>':''}
       ${a?`<span class="tag" style="margin-left:auto">${fmtHM(a.start)} 〜</span>`:''}</div>
     <div class="telapsed" data-elapsed="${a?a.start:''}">0:00</div>
     ${a?`<button class="bigbtn stop" data-stop="${a.id}">■ 終了して記録</button>
         <div class="subrow"><button class="discard" data-discard="${a.id}">✕ 取り消し（記録しない）</button></div>`
       :`<button class="bigbtn start" data-start="${cat}" data-workers="${workers.join('|')}">▶ 開始</button>
+        ${cat==='kenpin'?`<div class="subrow"><button class="discard" data-batkenpin="${wkey}" style="${batSel?`color:#fff;background:${tcolor(t.cvar)};border-radius:9px;padding:5px 12px`:''}">${batSel?'☑':'☐'} バッテリー仕入表検品</button></div>`:''}
         <div class="thint">タップで計測開始 → もう一度で終了＆記録</div>`}
   </div>`;
 }
@@ -648,29 +1311,33 @@ function zatsumuCard(workers,team){
 }
 
 /* ---------- team page ---------- */
-let teamSel=[...WORKERS];
+let teamSel=[];
 function viewTeam(){
   const chips=WORKERS.map(w=>`<div class="chip ${teamSel.includes(w)?'on':''}" data-teamchip="${w}">${w}</div>`).join('');
-  const t=ALL_TASKS.nouhin;
-  const actives=state.active.filter(x=>x.cat==='nouhin');
-  const activeHtml=actives.map(a=>`<div class="task-tile active" style="--tc:${tcolor(t.cvar)};margin-top:12px">
+  const teamCard=cat=>{
+    const t=ALL_TASKS[cat];
+    const actives=state.active.filter(x=>x.cat===cat);
+    const activeHtml=actives.map(a=>`<div class="task-tile active" style="--tc:${tcolor(t.cvar)};margin-top:10px">
       <div class="thead"><div class="tile-ic">${t.icon}</div><span class="tname">${t.label}</span><span class="tag" style="margin-left:auto">${a.workers.join('・')}</span></div>
       <div class="telapsed" data-elapsed="${a.start}">0:00</div>
       <button class="bigbtn stop" data-stop="${a.id}">■ 終了して記録</button>
       <div class="subrow"><button class="discard" data-discard="${a.id}">✕ 取り消し</button></div></div>`).join('');
+    return `<div class="card"><div class="thead" style="margin-bottom:10px">
+        <div class="tile-ic" style="--tc:${tcolor(t.cvar)};background:color-mix(in srgb,${tcolor(t.cvar)} 15%,transparent)">${t.icon}</div>
+        <span class="tname" style="font-size:18px">${t.label}</span></div>
+      ${actives.length?activeHtml:`
+        <button class="bigbtn start" style="--tc:${tcolor(t.cvar)}" data-teamstart="${cat}">▶ 選択中のメンバーで開始</button>
+        <div class="thint" style="margin-top:8px">${teamSel.length?'参加者: <b>'+teamSel.join('・')+'</b>':'⚠ 参加者を選択してください'}</div>`}
+    </div>`;
+  };
   const td=todayStr();
-  const teamRecs=state.records.filter(r=>r.cat==='nouhin'||(r.cat==='zatsumu'&&r.workers.length>1)).sort((a,b)=>new Date(b.start)-new Date(a.start));
+  const teamRecs=state.records.filter(r=>r.cat==='nouhin'||r.cat==='jiko'||(r.cat==='zatsumu'&&r.workers.length>1)).sort((a,b)=>new Date(b.start)-new Date(a.start));
   const today=teamRecs.filter(r=>isoDay(r.start)===td);
   return `<div class="card"><h2>👥 全員作業（複数人）</h2>
-      <div class="sub">まず参加者を選び、納品は「開始」で計測、雑務は種別をタップで記録します</div>
+      <div class="sub">まず参加者を選び、梱包＆納品/自己配梱包は「開始」で計測、雑務は種別をタップで記録します</div>
       <div style="font-size:13px;font-weight:800;color:var(--ink2);margin-bottom:6px">参加者を選択</div>
       <div class="chips">${chips}</div></div>
-    <div class="card"><div class="thead" style="margin-bottom:10px">
-        <div class="tile-ic" style="--tc:${tcolor(t.cvar)};background:color-mix(in srgb,var(--nouhin) 15%,transparent)">${t.icon}</div>
-        <span class="tname" style="font-size:18px">納品</span></div>
-      <button class="bigbtn start" style="--tc:${tcolor(t.cvar)}" data-teamstart="nouhin">▶ 選択中のメンバーで開始</button>
-      <div class="thint" style="margin-top:8px">${teamSel.length?'参加者: <b>'+teamSel.join('・')+'</b>':'⚠ 参加者を選択してください'}</div>
-      ${activeHtml}</div>
+    <div class="grid cols2" style="margin-top:2px">${teamCard('nouhin')}${teamCard('jiko')}</div>
     ${zatsumuCard(teamSel,true)}
     <div class="card"><h2>🗓 本日のタイムスケジュール（全員作業）</h2><div class="sub">時系列で表示</div>${timeline(today)}</div>
     ${teamRecs.length>today.length?`<div class="card"><h2>これまでの記録</h2>${recListHtml(teamRecs.filter(r=>isoDay(r.start)!==td).slice(0,40))}</div>`:''}`;
@@ -703,7 +1370,7 @@ function timeline(recs){
     return `<div class="tl-item" style="--c:${c}">
       <div class="tl-time">${fmtHM(r.start)}</div>
       <div class="tl-node"><div class="tl-dot ${t.timed?'':'log'}"></div></div>
-      <div class="tl-body">
+      <div class="tl-body" data-rdet="${r.id}" style="cursor:pointer" title="タップで詳細">
         <span class="tl-badge" style="background:${c}">${t.icon} ${t.label}</span>
         ${right}<span class="tl-grow"></span>
         <span class="tl-meta">${esc(metaAll.join(' ・ '))}</span>
@@ -715,7 +1382,7 @@ function timeline(recs){
 function recListHtml(recs){
   if(!recs.length)return `<div class="empty">記録がありません</div>`;
   return `<div>${recs.map(r=>{const t=ALL_TASKS[r.cat];const meta=recMeta(r,t);
-    return `<div class="rec">
+    return `<div class="rec" data-rdet="${r.id}" style="cursor:pointer" title="タップで詳細">
       <span class="badge" style="background:${tcolor(t.cvar)}">${t.label}</span>
       <span class="dur">${t.timed?fmtDur(r.sec):'—'}</span>
       <span class="time">${fmtDate(r.start)} ${fmtHM(r.start)}${t.timed?'-'+fmtHM(r.end):''}</span>
@@ -724,9 +1391,72 @@ function recListHtml(recs){
 }
 
 /* ============================================================
+   記録の詳細(カードタップで表示: 作業内容+その時間帯の仕入表の変更点)
+   ============================================================ */
+function openRecDetail(recId){
+  const r=state.records.find(x=>x.id===recId);if(!r)return;
+  const t=ALL_TASKS[r.cat];
+  const s=new Date(r.start).getTime(), e=new Date(r.end).getTime()+180000;
+  // ① 基本情報
+  const info=[];
+  if(t.timed)info.push(['作業時間',fmtDur(r.sec)+(r.noTime?'':'')]);
+  if(t.fields.includes('count')&&r.count!=null)info.push([t.label+'個数',r.count+(t.unit||'個')]);
+  if(r.reCount)info.push(['再検品',r.reCount+'件']);
+  if(r.packNo)info.push(['梱包No.',r.packNo]);
+  if(r.sub)info.push(['作業種別',r.sub]);
+  if(r.retake)info.push(['撮り直し','あり']);
+  if(r.recheck)info.push(['再チェック','あり']);
+  if(r.bat)info.push(['バッテリー仕入表','🔋 対象']);
+  // ② この計測時間内のボード操作(チェック/解除。この端末で24時間以内の操作のみ残っています)
+  const step={satsuei:'satsuei',shashin:'shashin',amazon:'amazon',nouhin:'konpo',jiko:'konpo'}[r.cat];
+  let bevHtml='';
+  if(step){
+    const last={};
+    boardEvents.forEach(x=>{if(x.step!==step||!x.i||x.t<s-60000||x.t>e)return;last[x.i]=x.n;});
+    const on=Object.keys(last).filter(i=>last[i]>0).sort();
+    const off=Object.keys(last).filter(i=>last[i]<0).sort();
+    if(on.length||off.length)bevHtml=`<div style="font-weight:800;font-size:13px;margin:14px 0 5px">📦 この計測でのチェック操作</div>
+      <div style="background:var(--surface-2);border:1px solid var(--border);border-radius:11px;padding:9px 12px;font-size:13px">
+        ${on.length?`<div>✓ チェック: ${on.map(esc).join('、')}</div>`:''}
+        ${off.length?`<div style="color:var(--crit)">✕ 解除: ${off.map(esc).join('、')}</div>`:''}
+      </div>`;
+  }
+  // ③ この計測時間内の仕入表の変更点(作業者本人+担当者未設定の分)
+  const chg=(shiireData.changes||[]).filter(c=>{
+    if(c.type==='白変更')return false;
+    const ct=new Date(c.t).getTime();
+    if(ct<s-60000||ct>e)return false;
+    if(c.editor&&c.editor!=='不明'&&c.editor!=='未設定'&&!r.workers.some(w=>String(c.editor).split('・').indexOf(w)>=0))return false;
+    return true;
+  }).sort((a,b)=>new Date(a.t)-new Date(b.t));
+  const oldRec=new Date(r.start).getTime()<Date.now()-7*86400000;
+  const chgHtml=`<div style="font-weight:800;font-size:13px;margin:14px 0 5px">📥 この計測時間内の仕入表の変更点</div>`+(
+    chg.length?`<div style="background:var(--surface-2);border:1px solid var(--border);border-radius:11px;padding:9px 12px;font-size:12.5px;max-height:220px;overflow:auto">
+      ${chg.map(c=>`<div style="display:flex;gap:9px;padding:2px 0;align-items:baseline">
+        <span style="font-variant-numeric:tabular-nums;color:var(--muted);flex:0 0 auto">${fmtHM(c.t)}</span>
+        <span style="font-weight:800;flex:0 0 auto">No.${esc(c.no)}</span>
+        <span style="min-width:0">${esc(c.col)}: ${c.oldV?esc(c.oldV)+' → ':''}${esc(c.newV)}${c.sku?` <span style="color:var(--muted)">(${esc(c.sku)})</span>`:''}</span></div>`).join('')}
+    </div>`
+    :`<div class="thint">${oldRec?'この記録は変更データの保持期間(直近7日)より前のため表示できません':'この時間帯の変更データはありません'}</div>`);
+  const box=document.getElementById('modalBox');
+  box.innerHTML=`<h3 style="color:${tcolor(t.cvar)}">${t.icon} ${t.label} の記録詳細</h3>
+    <div style="display:flex;gap:16px;margin-bottom:10px;flex-wrap:wrap">
+      ${miniInfo('作業者',r.workers.join('・'))}${miniInfo('日付',fmtDate(r.start))}
+      ${miniInfo('時刻',t.timed?fmtHM(r.start)+'–'+fmtHM(r.end):fmtHM(r.start))}</div>
+    ${info.length?`<div style="background:var(--surface-2);border:1px solid var(--border);border-radius:11px;padding:9px 12px;font-size:13px">
+      ${info.map(([k,v])=>`<div style="display:flex;gap:10px;padding:2px 0"><span style="color:var(--muted);flex:0 0 110px">${k}</span><b>${esc(String(v))}</b></div>`).join('')}</div>`:''}
+    ${r.note?`<div style="font-weight:800;font-size:13px;margin:14px 0 5px">📝 備考</div><div style="background:var(--surface-2);border:1px solid var(--border);border-radius:11px;padding:9px 12px;font-size:13px">${esc(r.note)}</div>`:''}
+    ${bevHtml}${chgHtml}
+    <div class="modal-acts"><button class="btn ghost" onclick="closeModal()">閉じる</button>
+      <button class="btn primary" id="rd_edit">✎ この記録を編集</button></div>`;
+  showModal();
+  document.getElementById('rd_edit').onclick=()=>{closeModal();openEditModal(r.id);};
+}
+
+/* ============================================================
    admin
    ============================================================ */
-const TIMED_CATS=['kenpin','satsuei','shashin','amazon','nouhin'];
+const TIMED_CATS=['kenpin','satsuei','shashin','amazon','nouhin','jiko'];
 let adminFilter={range:'30',worker:'all',cat:'all'};
 function filteredRecords(){
   let recs=state.records.filter(known);const now=new Date();
@@ -740,20 +1470,23 @@ function filteredRecords(){
 function viewAdmin(){
   const recs=filteredRecords();
   const timed=recs.filter(r=>ALL_TASKS[r.cat].timed);
-  const total=timed.reduce((s,r)=>s+r.sec,0);
+  const total=timed.reduce((s,r)=>s+effSec(r),0);
   const totalCount=recs.reduce((s,r)=>s+(r.count||0),0);
   const zatsCount=recs.filter(r=>r.cat==='zatsumu').length;
   const shashinRe=recs.filter(r=>r.cat==='shashin'&&r.recheck).length;
   const kenpinRe=recs.filter(r=>r.cat==='kenpin').reduce((s,r)=>s+(r.reCount||0),0);
-  const perW={};WORKERS.forEach(w=>perW[w]=0);timed.forEach(r=>r.workers.forEach(w=>{if(perW[w]!=null)perW[w]+=r.sec;}));
-  const perC={};TIMED_CATS.forEach(c=>perC[c]=0);timed.forEach(r=>{if(perC[r.cat]!=null)perC[r.cat]+=r.sec;});
-  const avgRows=['kenpin','satsuei','nouhin'].map(c=>{const t=ALL_TASKS[c];const rs=recs.filter(r=>r.cat===c&&r.count>0);
-    const tsec=rs.reduce((s,r)=>s+r.sec,0),cnt=rs.reduce((s,r)=>s+r.count,0);
+  const perW={};WORKERS.forEach(w=>perW[w]=0);timed.forEach(r=>r.workers.forEach(w=>{if(perW[w]!=null)perW[w]+=effSec(r);}));
+  const perC={};TIMED_CATS.forEach(c=>perC[c]=0);timed.forEach(r=>{if(perC[r.cat]!=null)perC[r.cat]+=effSec(r);});
+  const avgRows=['kenpin','satsuei','shashin','amazon','nouhin','jiko'].map(c=>{const t=ALL_TASKS[c];const rs=recs.filter(r=>r.cat===c&&r.count>0);
+    const tsec=rs.reduce((s,r)=>s+effSec(r),0),cnt=rs.reduce((s,r)=>s+r.count,0);
     return {label:t.label,cvar:t.cvar,icon:t.icon,avg:cnt?tsec/cnt:0,cnt,tsec};});
-  const perTimeRows=['shashin','amazon'].map(c=>{const t=ALL_TASKS[c];const rs=recs.filter(r=>r.cat===c);
-    const tsec=rs.reduce((s,r)=>s+r.sec,0);
-    return {label:t.label,cvar:t.cvar,icon:t.icon,avg:rs.length?tsec/rs.length:0,n:rs.length,tsec};});
-  return `<div class="card"><h2>📊 管理者ダッシュボード</h2><div class="sub">人物ごと・作業ごとの時間を集計</div>
+  return `<div class="card"><div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+    <h2 style="margin:0">📊 管理者ダッシュボード</h2>
+    <div style="margin-left:auto;display:flex;gap:6px;flex-wrap:wrap">
+      <button class="btn ghost sm" id="adm_manual">📕 管理者マニュアル</button>
+      <button class="btn ghost sm" id="adm_pw">🔑 パスワード変更</button>
+      <button class="btn ghost sm" id="adm_lock">🔒 ロック</button>
+    </div></div><div class="sub">人物ごと・作業ごとの時間を集計</div>
     <div class="filters">
       <label class="fld">期間<select id="f_range">
         <option value="7" ${adminFilter.range==='7'?'selected':''}>直近7日</option>
@@ -771,21 +1504,19 @@ function viewAdmin(){
       <div class="stat" style="--ac:var(--shashin)"><div class="label">写真 再チェック</div><div class="val">${shashinRe}<small> 件</small></div></div>
       <div class="stat" style="--ac:var(--zatsumu)"><div class="label">雑務 記録数</div><div class="val">${zatsCount}<small> 件</small></div></div>
     </div></div>
+    ${warnHistCard()}
+    ${changesCard(true)}
     <div class="grid cols2">
       <div class="card"><h2>人物別 合計作業時間</h2><div class="sub">複数人作業は参加者それぞれに加算</div>
         ${barChart(WORKERS.map(w=>({label:w,val:perW[w],color:wcolHex(w)})))}</div>
       <div class="card"><h2>作業別 合計時間</h2><div class="sub">時間計測する作業（雑務は計測なし）</div>
         ${barChart(TIMED_CATS.map(c=>({label:ALL_TASKS[c].label,val:perC[c],color:tcolor(ALL_TASKS[c].cvar)})))}</div>
     </div>
-    <div class="card"><h2>効率指標</h2><div class="sub">1個あたり＝検品・撮影・納品 / 1回あたり＝写真チェック・Amazon貼付</div>
+    <div class="card"><h2>効率指標</h2><div class="sub">1個(件)あたりの平均作業時間。撮り直し・再チェック分は個数に含まれません</div>
       <div class="stats">${avgRows.map(r=>`<div class="stat" style="--ac:${tcolor(r.cvar)}">
         <div class="label" style="color:${tcolor(r.cvar)};font-weight:800">${r.icon} ${r.label}</div>
         <div class="val">${r.avg?Math.round(r.avg/60*10)/10:'—'}<small> 分/個</small></div>
-        <div style="font-size:12px;color:var(--muted);margin-top:2px">計${r.cnt}個 / ${fmtDurShort(r.tsec)}</div></div>`).join('')}
-      ${perTimeRows.map(r=>`<div class="stat" style="--ac:${tcolor(r.cvar)}">
-        <div class="label" style="color:${tcolor(r.cvar)};font-weight:800">${r.icon} ${r.label}</div>
-        <div class="val">${r.avg?Math.round(r.avg/60*10)/10:'—'}<small> 分/回</small></div>
-        <div style="font-size:12px;color:var(--muted);margin-top:2px">計${r.n}回 / ${fmtDurShort(r.tsec)}</div></div>`).join('')}</div></div>
+        <div style="font-size:12px;color:var(--muted);margin-top:2px">計${r.cnt}個 / ${fmtDurShort(r.tsec)}</div></div>`).join('')}</div></div>
     <div class="card"><h2>作業者 × 作業 マトリクス</h2>${matrixTable(recs)}</div>
     <div class="card"><div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
         <h2 style="margin:0">全記録（編集・削除可）</h2><span class="tag">${recs.length}件</span>
@@ -800,11 +1531,11 @@ function viewAdmin(){
       <div class="info">🔗 <b>スプレッドシートや他端末との自動同期</b>には、Google スプレッドシート側に連携用の仕組み(Google Apps Script)の追加が必要です。詳しくは「仕入表連携」タブをご覧ください。</div></div>`;
 }
 function matrixTable(recs){
-  const cols=['kenpin','satsuei','shashin','amazon','nouhin','zatsumu'];
+  const cols=['kenpin','satsuei','shashin','amazon','nouhin','jiko','zatsumu'];
   const rows=WORKERS.map(w=>{const cells=cols.map(c=>{const t=ALL_TASKS[c];const rs=recs.filter(r=>r.cat===c&&r.workers.includes(w));
       if(!rs.length)return `<td style="color:var(--muted)">—</td>`;
-      return t.timed?`<td style="font-variant-numeric:tabular-nums">${fmtDurShort(rs.reduce((s,r)=>s+r.sec,0))}</td>`:`<td style="font-variant-numeric:tabular-nums">${rs.length}件</td>`;}).join('');
-    const tot=recs.filter(r=>r.workers.includes(w)&&ALL_TASKS[r.cat].timed).reduce((s,r)=>s+r.sec,0);
+      return t.timed?`<td style="font-variant-numeric:tabular-nums">${fmtDurShort(rs.reduce((s,r)=>s+effSec(r),0))}</td>`:`<td style="font-variant-numeric:tabular-nums">${rs.length}件</td>`;}).join('');
+    const tot=recs.filter(r=>r.workers.includes(w)&&ALL_TASKS[r.cat].timed).reduce((s,r)=>s+effSec(r),0);
     return `<tr><td style="font-weight:900">${w}</td>${cells}<td style="font-weight:900;font-variant-numeric:tabular-nums">${tot?fmtDurShort(tot):'—'}</td></tr>`;}).join('');
   return `<div class="tbl-scroll"><table class="data"><thead><tr><th>作業者</th>${cols.map(c=>`<th>${ALL_TASKS[c].label}</th>`).join('')}<th>合計時間</th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
@@ -813,7 +1544,7 @@ function dataTable(recs){
   const rows=recs.map(r=>{const t=ALL_TASKS[r.cat];
     const info=[r.product&&('商品:'+r.product),r.packNo&&('No.'+r.packNo),r.sub,(r.count!=null&&t.fields.includes('count'))&&(r.count+t.unit),
       r.retake&&'撮り直し',t.fields.includes('recheck')&&(r.recheck?'再チェック':'1回目')].filter(Boolean).join(' / ');
-    return `<tr><td>${fmtDate(r.start)}</td><td><span class="pill" style="background:${tcolor(t.cvar)}">${t.label}</span></td>
+    return `<tr data-rdet="${r.id}" style="cursor:pointer" title="タップで詳細"><td>${fmtDate(r.start)}</td><td><span class="pill" style="background:${tcolor(t.cvar)}">${t.label}</span></td>
       <td>${r.workers.join('・')}</td><td style="font-variant-numeric:tabular-nums">${t.timed?fmtHM(r.start)+'-'+fmtHM(r.end):fmtHM(r.start)}</td>
       <td style="font-variant-numeric:tabular-nums;font-weight:800">${t.timed?fmtDur(r.sec):'—'}</td>
       <td style="max-width:190px;overflow:hidden;text-overflow:ellipsis">${esc(info)}</td>
@@ -840,7 +1571,7 @@ function viewShiire(){
   const kenpin=state.records.filter(r=>r.cat==='kenpin'&&r.product);
   const map={};
   kenpin.forEach(r=>{const k=r.product.trim();if(!map[k])map[k]={ins:new Set(),count:0,sec:0,last:r.start};
-    r.workers.forEach(w=>map[k].ins.add(w));map[k].count+=(r.count||0);map[k].sec+=r.sec;
+    r.workers.forEach(w=>map[k].ins.add(w));map[k].count+=(r.count||0);map[k].sec+=effSec(r);
     if(new Date(r.start)>new Date(map[k].last))map[k].last=r.start;});
   const sup=state.suppliers;let matchHtml='';
   if(sup.length){const rows=sup.map(s=>{const m=map[s.code]||map[s.name],done=!!m;
@@ -885,7 +1616,12 @@ function bindView(){
   const v=document.getElementById('view');
   v.querySelectorAll('[data-goto]').forEach(el=>el.onclick=()=>go('worker',el.dataset.goto));
   v.querySelectorAll('[data-page]').forEach(el=>el.onclick=()=>go(el.dataset.page));
-  v.querySelectorAll('[data-start]').forEach(b=>b.onclick=()=>startTimer(b.dataset.start,b.dataset.workers.split('|')));
+  v.querySelectorAll('[data-start]').forEach(b=>b.onclick=()=>{
+    const ws=b.dataset.workers.split('|'), wkey=ws.slice().sort().join(',');
+    const bat=b.dataset.start==='kenpin'&&!!batKenpinSel[wkey];
+    if(bat)delete batKenpinSel[wkey];
+    startTimer(b.dataset.start,ws,{bat});});
+  v.querySelectorAll('[data-batkenpin]').forEach(b=>b.onclick=()=>{const k=b.dataset.batkenpin;batKenpinSel[k]=!batKenpinSel[k];render();});
   v.querySelectorAll('[data-stop]').forEach(b=>b.onclick=()=>stopTimer(b.dataset.stop));
   v.querySelectorAll('[data-discard]').forEach(b=>b.onclick=()=>{if(confirm('計測を取り消しますか？（記録されません）'))discardTimer(b.dataset.discard);});
   v.querySelectorAll('[data-teamstart]').forEach(b=>b.onclick=()=>{if(!teamSel.length){toast('参加者を選んでください');return;}startTimer(b.dataset.teamstart,teamSel);});
@@ -894,10 +1630,39 @@ function bindView(){
     logZatsumu(team?teamSel:[route.worker],b.dataset.zlog);});
   v.querySelectorAll('[data-zother]').forEach(b=>b.onclick=()=>{const card=b.closest('[data-zteam]');const team=card&&card.dataset.zteam==='1';
     const ws=team?teamSel:[route.worker];if(!ws.length){toast('参加者を選んでください');return;}openZatsumuOther(ws);});
-  v.querySelectorAll('[data-edit]').forEach(b=>b.onclick=()=>openEditModal(b.dataset.edit));
+  v.querySelectorAll('[data-edit]').forEach(b=>b.onclick=e=>{e.stopPropagation();openEditModal(b.dataset.edit);});
+  v.querySelectorAll('[data-rdet]').forEach(el=>el.onclick=e=>{if(e.target.closest('[data-edit]'))return;openRecDetail(el.dataset.rdet);});
   const fr=document.getElementById('f_range');if(fr)fr.onchange=e=>{adminFilter.range=e.target.value;render();};
   const fw=document.getElementById('f_worker');if(fw)fw.onchange=e=>{adminFilter.worker=e.target.value;render();};
   const fc=document.getElementById('f_cat');if(fc)fc.onchange=e=>{adminFilter.cat=e.target.value;render();};
+  // 備品チェックリスト
+  v.querySelectorAll('[data-bh-cur]').forEach(i=>i.onchange=()=>{
+    const d=bihinGet(),it=d.items.find(x=>x.id===i.dataset.bhCur);if(!it)return;
+    it.cur=i.value.trim();it.done=false; // 在庫を入れ直したら補充済は自動解除
+    bihinSave(d);render();});
+  v.querySelectorAll('[data-bh-note]').forEach(i=>i.onchange=()=>{
+    const d=bihinGet(),it=d.items.find(x=>x.id===i.dataset.bhNote);if(!it)return;
+    it.note=i.value.trim();bihinSave(d);render();});
+  v.querySelectorAll('[data-bh-done]').forEach(b=>b.onclick=()=>{
+    const d=bihinGet(),it=d.items.find(x=>x.id===b.dataset.bhDone);if(!it)return;
+    it.done=!it.done;bihinSave(d);render();});
+  v.querySelectorAll('[data-bh-edit]').forEach(b=>b.onclick=()=>openBihinEdit(b.dataset.bhEdit));
+  bind('bh_add',()=>openBihinEdit(null));
+  bind('bh_filter',()=>{bihinFilter=!bihinFilter;render();});
+  bind('bh_export',openBihinExport);
+  bind('bh_clear',()=>{if(confirm('全ての品の「今の在庫」を空にしますか？\n(在庫チェックの前に押すと入力しやすくなります。補充済チェックも外れます)')){
+    const d=bihinGet();d.items.forEach(x=>{x.cur='';x.done=false;});bihinSave(d);render();toast('在庫の入力をクリアしました');}});
+  bind('bh_reset',()=>{if(confirm('全ての「補充済」チェックを外しますか？')){
+    const d=bihinGet();d.items.forEach(x=>x.done=false);bihinSave(d);render();toast('補充済をリセットしました');}});
+  // 管理者ロック / マニュアル
+  bind('al_ok',adminTryUnlock);bind('al_set',adminSetPw);
+  bind('adm_manual',openAdminManual);bind('adm_pw',openAdminPwChange);
+  bind('adm_lock',()=>{try{sessionStorage.removeItem('wt_adm');localStorage.removeItem('worktimer_adm_skip');}catch(e){}go('home');toast('管理者ページをロックしました');});
+  const alp=document.getElementById('al_pw');if(alp)alp.onkeydown=e=>{if(e.key==='Enter')adminTryUnlock();};
+  // 警告履歴(管理者ページ)
+  bind('wh_toggle',()=>{warnHistOpen=!warnHistOpen;render();});
+  bind('wh_clear',()=>{if(confirm('警告履歴を全て削除しますか？')){const lg=warnLog();lg.items={};pushSetState('_warnLog');render();toast('警告履歴をクリアしました');}});
+  renderWarnHead();
   bind('exportCsv',exportCSV);bind('loadSample',loadSample);
   bind('clearAll',()=>{if(confirm('全ての記録を削除します。よろしいですか？')){state={records:[],active:[],suppliers:[]};saveState();render();toast('全データを削除しました');}});
   bind('importCsvBtn',()=>document.getElementById('importCsv').click());
@@ -949,11 +1714,22 @@ function bindView(){
       if(d&&d.ok===false)lines.push('③ 変更点取得: ❌ サーバー側エラー: '+(d.error||'不明'));
       else lines.push('③ 変更点取得: ✅ 成功 (今日の記録 '+((d&&d.changes)||[]).length+'件)');
     }catch(e){lines.push('③ 変更点取得: ❌ '+(e.message||'失敗'));}
+    // ④ 納品ボードのテスト(サーバーの版・色判定まで確認)
+    try{
+      const d=await gasGet(url+(url.includes('?')?'&':'?')+'mode=board&debug=1');
+      if(d&&d.ok===false)lines.push('④ 納品ボード: ❌ サーバー側エラー: '+(d.error||'不明'));
+      else if(!d||d.groups===undefined)lines.push('④ 納品ボード: ❌ サーバーが旧バージョンです → GASコードを貼り替えて「デプロイを管理→✏→新バージョン→デプロイ」を実行してください');
+      else{
+        lines.push('④ 納品ボード: ✅ 対象セット '+d.groups.length+'件'+(d.groups.length?' ['+d.groups.map(g=>g.set+'('+g.items.length+'個)').join(' ')+']':''));
+        if(d.dbg)lines.push('　管理番号がある行の色内訳: '+Object.entries(d.dbg).map(([k,v])=>k+'='+v+'件').join(' / ')+'（対象=黄・緑・柿）');
+      }
+    }catch(e){lines.push('④ 納品ボード: ❌ '+(e.message||'失敗'));}
     lines.push('この結果を送ってもらえれば原因を特定できます');
     out.innerHTML=lines.map(esc).join('<br>');
   });
   document.querySelectorAll('[data-chg-refresh]').forEach(b=>b.onclick=()=>fetchChanges(false,true));
-  if(scfg.url&&(route.page==='worker'||route.page==='shiire')&&!shiireData.fetchedAt&&!shiireData.loading)fetchChanges(true);
+  if(scfg.url&&(route.page==='worker'||route.page==='shiire'||route.page==='admin')&&!shiireData.fetchedAt&&!shiireData.loading)fetchChanges(true);
+  if(scfg.url&&route.page==='home'&&!boardData.fetchedAt)fetchBoard();
   bindTooltips();startElapsedLoop();
 }
 function bind(id,fn){const el=document.getElementById(id);if(el)el.onclick=fn;}
@@ -1041,17 +1817,23 @@ function loadSample(){if(state.records.length&&!confirm('既存データに加�
 /* ============================================================
    仕入表 変更点の取得・表示 (Apps Script Webアプリと連携)
    ============================================================ */
-const APP_VER='v4.1';
+const APP_VER='v6.6';
 const SCFG_KEY='worktimer_shiire_cfg';
 let scfg=(()=>{try{return JSON.parse(localStorage.getItem(SCFG_KEY))||{};}catch(e){return {};}})();
 function saveScfg(){try{localStorage.setItem(SCFG_KEY,JSON.stringify(scfg));}catch(e){}}
 let shiireData={changes:[],fetchedAt:null,error:null,loading:false};
 
 let shiireRetryTimer=null;
-let chgOpen=new Set(); // 履歴詳細を開いている行 (No.|列名)
+let chgOpen=new Set(); // 履歴詳細を開いている行 (日付|No.|列名)
+let chgDayOpen=null;   // 日付ごとの開閉(初期値は今日だけ開く)
+let chgFilterW='all';  // 管理者ページ等の作業者絞り込み
 document.addEventListener('click',e=>{
   const t=e.target.closest('[data-tgl]');
-  if(t){const k=t.dataset.tgl;chgOpen.has(k)?chgOpen.delete(k):chgOpen.add(k);renderChangePanels();}
+  if(t){const k=t.dataset.tgl;chgOpen.has(k)?chgOpen.delete(k):chgOpen.add(k);renderChangePanels();return;}
+  const dd=e.target.closest('[data-chg-day]');
+  if(dd){if(chgDayOpen===null)chgDayOpen={[todayStr()]:true};chgDayOpen[dd.dataset.chgDay]=!chgDayOpen[dd.dataset.chgDay];renderChangePanels();return;}
+  const fw=e.target.closest('[data-chg-fw]');
+  if(fw){chgFilterW=fw.dataset.chgFw;renderChangePanels();return;}
 });
 /* GAS呼び出し: fetch(標準・CORS)を優先し、失敗したらJSONP(scriptタグ)に自動フォールバック */
 async function gasGet(url){
@@ -1080,7 +1862,10 @@ function fetchChanges(silent,force){
   clearTimeout(shiireRetryTimer);
   shiireData.loading=true;
   if(!silent)renderChangePanels();
-  const url=scfg.url+(scfg.url.includes('?')?'&':'?')+'mode=changes&since='+todayStr()+(force?'&force=1':'');
+  // 直近7日分を取得(日付別に折りたたみ表示。サーバー側ログは14日で自動削除)
+  const sd=new Date();sd.setDate(sd.getDate()-6);
+  const since=`${sd.getFullYear()}-${String(sd.getMonth()+1).padStart(2,'0')}-${String(sd.getDate()).padStart(2,'0')}`;
+  const url=scfg.url+(scfg.url.includes('?')?'&':'?')+'mode=changes&since='+since+(force?'&force=1':'');
   gasGet(url).then(data=>{
     if(data&&data.ok===false)throw new Error('サーバー側エラー: '+(data.error||'不明'));
     shiireData={changes:(data&&data.changes)||[],fetchedAt:new Date(),error:null,loading:false};
@@ -1091,7 +1876,7 @@ function fetchChanges(silent,force){
     shiireRetryTimer=setTimeout(()=>fetchChanges(true),15000); // 15秒後に自動再試行
   });
 }
-setInterval(()=>{if(scfg.url){fetchChanges(true);flushQ();pullRecords();}},60000);
+setInterval(()=>{if(scfg.url){fetchChanges(true);flushQ();pullRecords();fetchBoard();}},60000);
 
 /* ============================================================
    記録のデータ同期 (全PCで共有)
@@ -1147,6 +1932,468 @@ async function pullRecords(){
 function addRec(rec){ rec.updatedAt=Date.now(); state.records.push(rec); saveState(); queuePush(rec); }
 function pushDelete(id){ queuePush({id:id, deleted:true, updatedAt:Date.now()}); }
 
+/* ============================================================
+   納品進捗ボード
+   仕入表S列の管理番号(例:438001~438012)を先頭3桁でセット化し、
+   撮影→写真チェック→Amazon貼付→梱包→集荷依頼 の進捗を全PCで共有。
+   自己配送はAmazon貼付・集荷依頼を省略。全完了でホームから消える
+   ============================================================ */
+const NSTEPS=[
+  {k:'satsuei',label:'撮影',icon:'📷',cvar:'--satsuei'},
+  {k:'shashin',label:'写真チェック',icon:'🖼',cvar:'--shashin'},
+  {k:'amazon',label:'Amazon貼付',icon:'🏷',cvar:'--amazon'},
+  {k:'konpo',label:'梱包',icon:'📦',cvar:'--nouhin'},
+  {k:'shuka',label:'集荷依頼',icon:'🚚',cvar:'--zatsumu'},
+];
+let boardData={groups:[],states:{},fetchedAt:null};
+let boardOpen={};
+async function fetchBoard(){
+  if(!scfg.url)return;
+  try{
+    const d=await gasGet(scfg.url+(scfg.url.includes('?')?'&':'?')+'mode=board');
+    if(d&&d.ok){
+      const oldStates=(boardData&&boardData.states)||{};
+      boardData={groups:d.groups||[],states:d.states||{},resale:d.resale||[],batSets:d.batSets||[],fetchedAt:new Date(),legacy:(d.groups===undefined)};
+      // ★巻き戻り防止: このPCの状態の方が新しいセットはローカルを優先し、サーバー側も直す
+      //  (チェック直後にサーバーへの反映が終わる前の取得や、通信の到着順入れ替わり対策)
+      Object.keys(oldStates).forEach(k=>{
+        const loc=oldStates[k], srv=boardData.states[k];
+        if(loc&&loc._ts&&(!srv||!srv._ts||loc._ts>srv._ts)){
+          boardData.states[k]=loc;
+          pushSetState(k);
+        }
+      });
+      // 管理者パスワードのローカルキャッシュ(オフライン時のロック用)
+      try{const ap=boardData.states['_adminPW'];if(ap&&ap.h)localStorage.setItem('worktimer_admpw',ap.h);else localStorage.removeItem('worktimer_admpw');}catch(e){}
+      // 備品チェックリスト: サーバー分が古い場合はこのPCの新しい編集を優先(巻き戻り防止)
+      try{
+        const bh=boardData.states['_bihin'];
+        let c=null;try{c=JSON.parse(localStorage.getItem('worktimer_bihin'));}catch(e2){}
+        if(c&&c.items&&(!bh||!bh.items||(c.updatedAt||0)>(bh.updatedAt||0))){
+          boardData.states['_bihin']=c; // ローカルの方が新しい → 共有し直す
+          if((c.updatedAt||0)>((bh&&bh.updatedAt)||0))pushSetState('_bihin');
+        }else if(bh&&bh.items){
+          localStorage.setItem('worktimer_bihin',JSON.stringify(bh));
+        }
+      }catch(e){}
+      // 全商品が緑(自己配)のセットは、未設定なら自己配送を初期ONにする
+      boardData.groups.forEach(g=>{if(g.self&&!boardData.states[g.set]){setState(g.set).selfDel=true;}});
+      // 完了フラグと集荷待ちを再計算(チェックが外れたセットはリストに復帰する)
+      boardData.groups.forEach(g=>{
+        const st=boardData.states[g.set];if(!st)return;
+        let ch=false;
+        const d=setDoneCalc(g,st);
+        if(!!st.done!==d){st.done=d;ch=true;}
+        const hadWait=st.shukaWait;
+        shukaWaitSync(g,st);
+        if(hadWait!==st.shukaWait)ch=true;
+        if(ch)pushSetState(g.set);
+      });
+      renderBoardPanels();
+    }
+  }catch(e){}
+}
+function pushSetState(set){
+  if(!scfg.url)return;
+  const st=boardData.states[set]||{};
+  st._ts=Date.now(); // 競合解決用タイムスタンプ(新しい方が勝つ。通信の順序入れ替わりによる巻き戻り防止)
+  const data=JSON.stringify(st);
+  const base=scfg.url+(scfg.url.includes('?')?'&':'?')+'mode=nset&set='+encodeURIComponent(set);
+  const viaGet=()=>gasGet(base+'&data='+encodeURIComponent(data)).catch(()=>{});
+  // 大きいデータ(備品リスト等)はURLの長さ制限を避けてPOSTで送る。失敗時は従来のGET
+  if(data.length>1500&&window.fetch){
+    fetch(base,{method:'POST',body:data,headers:{'Content-Type':'text/plain;charset=utf-8'}})
+      .then(r=>r.text()).then(t=>{let j=null;try{j=JSON.parse(t);}catch(e){}if(!j||!j.ok)throw 0;})
+      .catch(viaGet);
+  }else viaGet();
+}
+const setState=set=>boardData.states[set]=boardData.states[set]||{selfDel:false,steps:{}};
+function stepState(set,step){const s=setState(set);s.steps=s.steps||{};return s.steps[step]=s.steps[step]||{checked:{}};}
+const setSteps=st=>NSTEPS.filter(s=>!(st.selfDel&&(s.k==='amazon'||s.k==='shuka'))); // 完了条件用
+/* 表示用: 自己配でもAmazon貼付済みSKUがあればAmazon行を表示(完了条件には含めない) */
+function displaySteps(g,st){
+  return NSTEPS.filter(s=>{
+    if(!st.selfDel)return true;
+    if(s.k==='shuka')return false;
+    if(s.k==='amazon'){
+      const ss=st.steps&&st.steps.amazon;
+      return !!(ss&&(ss.all||Object.keys(ss.checked||{}).length));
+    }
+    return true;
+  });
+}
+let doneView=null; const doneOpen={};
+/* 工程の対象SKU: 写真チェック=撮影済みのみ / Amazon貼付=写真チェック済みのみ */
+const STEP_PREV={shashin:'satsuei', amazon:'shashin', konpo:'shashin'};
+function stepItems(g,stepKey){
+  const prev=STEP_PREV[stepKey];
+  if(!prev)return g.items;
+  const st=boardData.states[g.set];
+  const ss=st&&st.steps&&st.steps[prev];
+  if(!ss)return [];
+  return g.items.filter(i=>ss.all||(ss.checked&&ss.checked[i]));
+}
+/* セット外の追加SKU(撮影時に「別のSKU」で選んだ分)の共有進捗 */
+function extraStep(k){
+  const s=boardData.states['_extraSKU']=boardData.states['_extraSKU']||{steps:{}};
+  s.steps=s.steps||{};
+  return s.steps[k]=s.steps[k]||{checked:{}};
+}
+/* 撮り直し選択されたSKU(再チェック待ち)の共有リスト */
+function retakePending(){
+  const s=boardData.states['_retakeSKU']=boardData.states['_retakeSKU']||{checked:{}};
+  s.checked=s.checked||{};
+  return s;
+}
+/* 納品しきれなかったSKU(納品待ち・次回の納品プランへ) */
+function koborePending(){
+  const s=boardData.states['_koboreSKU']=boardData.states['_koboreSKU']||{items:{}};
+  s.items=s.items||{};
+  return s;
+}
+/* バッテリー仕入表(付属品)由来の管理番号か判定(先頭3桁で判定)
+   付属品の作業は個数・タイムとも集計に含めない */
+function isBatSKU(n){
+  const p=String(n).slice(0,3);
+  if((boardData.batSets||[]).includes(p))return true;
+  const g=(boardData.groups||[]).find(x=>x.set===p);
+  return !!(g&&g.bat);
+}
+/* 追加SKUを全工程から取り消す(撮影でのミス選択の修正用) */
+function extraRemove(n){
+  const s=boardData.states['_extraSKU'];
+  if(s&&s.steps)Object.values(s.steps).forEach(st=>{if(st&&st.checked)delete st.checked[n];});
+  const rp=retakePending(); if(rp.checked[n]){delete rp.checked[n];pushSetState('_retakeSKU');}
+  pushSetState('_extraSKU');
+}
+function stepInfo(items,ss){
+  const total=items.length;
+  if(!ss)return {cnt:0,done:false,label:'未'};
+  const isOn=i=>ss.all||(ss.checked&&ss.checked[i]);
+  const cnt=items.filter(isOn).length;
+  if(total>0&&cnt>=total)return {cnt,done:true,label:'✅ 完了'};
+  if(!cnt)return {cnt:0,done:false,label:'未'};
+  let lastContig=null;for(const i of items){if(isOn(i))lastContig=i;else break;}
+  return {cnt,done:false,label:(lastContig?lastContig+'まで':cnt+'件')+'済 ('+cnt+'/'+total+')'};
+}
+/* チェック操作の記録(タイマー個数の自動集計用) */
+const BEV_KEY='worktimer_bev';
+let boardEvents=(()=>{try{return JSON.parse(localStorage.getItem(BEV_KEY))||[];}catch(e){return[];}})();
+function recordBoardDelta(step,n,item){
+  if(!n)return;
+  boardEvents.push({t:Date.now(),step,n,i:item||null});
+  const lim=Date.now()-86400000;boardEvents=boardEvents.filter(x=>x.t>lim);
+  try{localStorage.setItem(BEV_KEY,JSON.stringify(boardEvents));}catch(e){}
+}
+/* 窓内の操作結果: 最終的にチェック(+)/解除(-)になったSKU数(外して入れ直しても正しく1個) */
+function boardWindowStat(step,sISO,eISO){
+  const s=new Date(sISO).getTime(),e=new Date(eISO).getTime()+60000;
+  const last={};
+  boardEvents.forEach(x=>{if(x.step!==step||x.t<s||x.t>e||!x.i)return;last[x.i]=x.n;});
+  let plus=0,minus=0;
+  Object.values(last).forEach(v=>{if(v>0)plus++;else if(v<0)minus++;});
+  return {plus,minus};
+}
+function autoBoardCount(step,sISO,eISO){
+  return boardWindowStat(step,sISO,eISO).plus;
+}
+/* 操作 */
+function bdAll(set,step){
+  const g=boardData.groups.find(x=>x.set===set);if(!g)return;
+  const list=stepItems(g,step); // 写真チェックは撮影済みのみ対象
+  const ss=stepState(set,step);
+  ss.checked=ss.checked||{};
+  const newly=list.filter(i=>!(ss.all||ss.checked[i]));
+  list.forEach(i=>ss.checked[i]=true);
+  ss.all=g.items.every(i=>ss.checked[i]);
+  newly.forEach(i=>recordBoardDelta(step,1,i));
+  afterBoardChange(set);
+}
+function bdItem(set,step,item){
+  const ss=stepState(set,step);ss.checked=ss.checked||{};
+  if(ss.checked[item]){delete ss.checked[item];ss.all=false;recordBoardDelta(step,-1,item);}
+  else{ss.checked[item]=true;recordBoardDelta(step,1,item);}
+  afterBoardChange(set);
+}
+function bdClear(set,step){ // 全て解除(誤って全て完了を押した時の取り消し)
+  const g=boardData.groups.find(x=>x.set===set);if(!g)return;
+  const ss=stepState(set,step);
+  const had=g.items.filter(i=>ss.all||(ss.checked&&ss.checked[i]));
+  ss.all=false;ss.checked={};
+  had.forEach(i=>recordBoardDelta(step,-1,i));
+  afterBoardChange(set);
+}
+function bdShuka(set){const ss=stepState(set,'shuka');ss.all=!ss.all;afterBoardChange(set);}
+function bdSelf(set){const st=setState(set);st.selfDel=!st.selfDel;afterBoardChange(set);}
+function bdHide(set){if(confirm('セット'+set+' を一覧から非表示にしますか？(進捗データは残ります)')){setState(set).hidden=true;afterBoardChange(set);}}
+/* セットの完了判定(全SKU基準。チェックが外れれば未完了に戻る) */
+function setDoneCalc(g,st){
+  return setSteps(st).every(s=>{
+    if(s.k==='shuka')return !!(st.steps&&st.steps.shuka&&st.steps.shuka.all);
+    const items=STEP_PREV[s.k]?g.items:stepItems(g,s.k);
+    return stepInfo(items,st.steps&&st.steps[s.k]).done;
+  });
+}
+/* 集荷待ちの管理: 梱包完了かつ集荷未のセットに待ち始め時刻を記録(翌日持ち越し警告用) */
+function shukaWaitSync(g,st){
+  if(st.selfDel){if(st.shukaWait)delete st.shukaWait;return;}
+  const konpoDone=stepInfo(g.items,st.steps&&st.steps.konpo).done;
+  const shukaDone=!!(st.steps&&st.steps.shuka&&st.steps.shuka.all);
+  if(konpoDone&&!shukaDone){if(!st.shukaWait)st.shukaWait=Date.now();}
+  else if(st.shukaWait)delete st.shukaWait;
+}
+function afterBoardChange(set){
+  const st=setState(set),g=boardData.groups.find(x=>x.set===set);
+  if(g){
+    const done=setDoneCalc(g,st);
+    if(done&&!st.done){st.done=true;confetti();toast('📦 セット'+set+' の納品が完了しました！おつかれさまです 🎉');}
+    else if(!done&&st.done){st.done=false;} // 全て解除などで未完了に戻す
+    shukaWaitSync(g,st);
+  }
+  renderBoardPanels();pushSetState(set);
+}
+/* ============================================================
+   警告センター: 全ての警告をヘッダー右上の「⚠警告」に集約
+   ・問題が修正されると自動で消える ・「✓解除」で手動でも消せる(全PC共通)
+   ・履歴は管理者ページに一覧(_warnLogで共有・30日/100件で自動整理)
+   ============================================================ */
+function collectWarns(){
+  const ws=[],td=todayStr();
+  (boardData.groups||[]).forEach(g=>{
+    const st=boardData.states[g.set];if(!st||st.hidden)return;
+    const stt=st.steps||{};
+    if(!st.selfDel&&!st.done){
+      const konpoDone=stepInfo(g.items,stt.konpo).done;
+      const shukaDone=!!(stt.shuka&&stt.shuka.all);
+      if(konpoDone&&!shukaDone){
+        // 当日の集荷依頼待ちは警告ではなくヘッダー(タイトル右)に常時表示(collectShukaWait)
+        if(st.shukaWait&&isoDay(new Date(st.shukaWait).toISOString())!==td)
+          ws.push({key:`carry|${g.set}|${td}`,lv:'crit',tx:`🚚 ${g.set}〜 は前日以前から集荷依頼待ちです。集荷されていないか段ボールを確認し、残っていれば集荷依頼をかけてください。すでに集荷済みなら「集荷依頼済みにする」の押し忘れの可能性があります`});
+      }
+    }
+    [['satsuei','shashin','撮影','写真チェック'],['shashin','amazon','写真チェック','Amazon貼付'],['shashin','konpo','写真チェック','梱包']].forEach(([pa,pb,na,nb])=>{
+      const A=stt[pa],B=stt[pb];if(!B)return;
+      const bad=g.items.filter(i=>(B.all||(B.checked&&B.checked[i]))&&!(A&&(A.all||(A.checked&&A.checked[i]))));
+      if(bad.length)ws.push({key:`rev|${g.set}|${pa}|${pb}|${td}`,lv:'crit',tx:`⚠ ${g.set}〜: ${na}が未のまま${nb}済みになっているSKUがあります(${bad.slice(0,5).join(', ')}${bad.length>5?' ほか':''}) — チェックミスの可能性`});
+    });
+  });
+  const kpW=(boardData.states&&boardData.states['_koboreSKU']&&boardData.states['_koboreSKU'].items)||{};
+  if(Object.keys(kpW).length)ws.push({key:`kobore|${td}`,lv:'warn',tx:`📦 納品待ちSKUが ${Object.keys(kpW).length}個 あります。次回の梱包＆納品/自己配梱包の終了画面で選択して消化してください`});
+  (shiireData.changes||[]).filter(c=>c.type==='警告'&&isoDay(c.t)===td).forEach(c=>{
+    ws.push({key:'sh|'+c.t+'|'+c.no,lv:'crit',tx:`🚨 ${c.editor}へ: No.${c.no}${c.sku?' / '+c.sku:''} — ${c.note}`});
+  });
+  return ws;
+}
+function warnLog(){const s=boardData.states['_warnLog']=boardData.states['_warnLog']||{items:{}};s.items=s.items||{};return s;}
+function activeWarns(){ // 検出中の警告を履歴に記録しつつ、解除済みを除いて返す
+  const ws=collectWarns(),lg=warnLog();let ch=false;
+  ws.forEach(w=>{if(!lg.items[w.key]){lg.items[w.key]={tx:w.tx,lv:w.lv,t:Date.now(),done:0};ch=true;}});
+  const lim=Date.now()-30*86400000;
+  Object.keys(lg.items).forEach(k=>{if(lg.items[k].t<lim){delete lg.items[k];ch=true;}});
+  const keys=Object.keys(lg.items);
+  if(keys.length>100){keys.sort((a,b)=>lg.items[a].t-lg.items[b].t).slice(0,keys.length-100).forEach(k=>{delete lg.items[k];ch=true;});}
+  if(ch&&scfg.url)pushSetState('_warnLog');
+  return ws.filter(w=>!(lg.items[w.key]&&lg.items[w.key].done));
+}
+/* 集荷依頼待ちのセット一覧(タイトル右に常時表示・警告扱いではない) */
+function collectShukaWait(){
+  const out=[],td=todayStr();
+  (boardData.groups||[]).slice().sort((a,b)=>a.set.localeCompare(b.set)).forEach(g=>{
+    const st=boardData.states[g.set];if(!st||st.hidden||st.selfDel)return;
+    const stt=st.steps||{};
+    const konpoDone=stepInfo(g.items,stt.konpo).done;
+    const shukaDone=!!(stt.shuka&&stt.shuka.all);
+    if(konpoDone&&!shukaDone)out.push({set:g.set,carry:!!(st.shukaWait&&isoDay(new Date(st.shukaWait).toISOString())!==td)});
+  });
+  return out;
+}
+function renderWarnHead(){
+  const b=document.getElementById('warnBtn');
+  if(b){
+    let n=0;try{n=activeWarns().length;}catch(e){}
+    b.style.display=n?'':'none';
+    b.textContent=`⚠ 警告 ${n}件`;
+  }
+  const sh=document.getElementById('shukaHead');
+  if(sh){
+    let w=[];try{w=collectShukaWait();}catch(e){}
+    if(!w.length)sh.style.display='none';
+    else{
+      const anyCarry=w.some(x=>x.carry);
+      sh.style.display='';
+      sh.style.color=anyCarry?'var(--crit)':'var(--satsuei)';
+      sh.textContent=`🚚 集荷依頼待ち: ${w.map(x=>x.set+'〜'+(x.carry?'(前日分)':'')).join('・')}（14時までに集荷依頼）`;
+    }
+  }
+}
+function warnDismiss(k){
+  const lg=warnLog();
+  lg.items[k]=lg.items[k]||{tx:'',lv:'warn',t:Date.now()};
+  lg.items[k].done=1;lg.items[k].doneAt=Date.now();
+  pushSetState('_warnLog');
+}
+function openWarns(){
+  const act=activeWarns();
+  const box=document.getElementById('modalBox');
+  box.innerHTML=`<h3 style="color:var(--crit)">⚠ 現在の警告</h3>
+    <div class="sub">問題が修正されると自動で消えます。対応済みの警告は「✓ 解除」で消せます（全PC共通）</div>
+    ${act.length?act.map(w=>`<div style="display:flex;gap:10px;align-items:center;padding:9px 12px;margin-top:8px;border:1px solid ${w.lv==='crit'?'color-mix(in srgb,var(--crit) 45%,transparent)':'var(--border)'};border-radius:12px;background:${w.lv==='crit'?'color-mix(in srgb,var(--crit) 7%,var(--surface))':'var(--surface-2)'}">
+      <span style="min-width:0;font-size:13.5px">${esc(w.tx)}</span>
+      <button class="btn ghost sm" data-wd="${esc(w.key)}" style="margin-left:auto;flex:0 0 auto;color:var(--good);white-space:nowrap">✓ 解除</button></div>`).join('')
+    :`<div class="empty">現在の警告はありません 🎉</div>`}
+    <div class="modal-acts"><button class="btn primary" onclick="closeModal()">閉じる</button></div>`;
+  showModal();
+  box.querySelectorAll('[data-wd]').forEach(b=>b.onclick=()=>{warnDismiss(b.dataset.wd);openWarns();renderWarnHead();});
+}
+let warnHistOpen=false;
+function warnHistCard(){ // 管理者ページ上部の警告履歴(解除済み・解消済みも表示)
+  const lg=warnLog();
+  const act=new Set(collectWarns().map(w=>w.key));
+  const ents=Object.entries(lg.items).sort((a,b)=>b[1].t-a[1].t);
+  const head=`<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+    <h2 style="margin:0">⚠ 警告履歴</h2><span class="tag">${ents.length}件</span>
+    <span style="font-size:12px;color:var(--muted)">直近30日・最大100件</span>
+    <div style="margin-left:auto;display:flex;gap:6px">
+      ${ents.length?`<button class="btn ghost sm" id="wh_clear">🗑 履歴をクリア</button>`:''}
+      <button class="btn ghost sm" id="wh_toggle">${warnHistOpen?'▲ 閉じる':'▼ 開く'}</button></div></div>`;
+  if(!warnHistOpen)return `<div class="card">${head}</div>`;
+  const rows=ents.length?ents.map(([k,v])=>{
+    const isAct=act.has(k)&&!v.done;
+    const st=isAct?'<span class="pill" style="background:var(--crit)">発生中</span>'
+      :(v.done?'<span class="pill" style="background:var(--muted)">✓ 手動解除</span>':'<span class="pill" style="background:var(--good)">解消済み</span>');
+    const d=new Date(v.t);
+    return `<div style="display:flex;gap:10px;align-items:baseline;padding:7px 0;border-bottom:1px dashed var(--border);font-size:13px">
+      <span style="color:var(--muted);font-variant-numeric:tabular-nums;flex:0 0 auto">${d.getMonth()+1}/${String(d.getDate()).padStart(2,'0')} ${fmtHM(d.toISOString())}</span>
+      ${st}<span style="min-width:0">${esc(v.tx)}</span></div>`;
+  }).join(''):`<div class="empty">履歴はありません</div>`;
+  return `<div class="card">${head}<div style="margin-top:8px">${rows}</div></div>`;
+}
+/* 表示 */
+function renderBoardPanels(){document.querySelectorAll('[data-board]').forEach(el=>{el.innerHTML=boardHtml();});renderWarnHead();}
+function boardHtml(){
+  const doneListAll=(boardData.groups||[]).filter(g=>{const st=boardData.states[g.set];return st&&st.done&&!st.hidden;})
+    .sort((a,b)=>a.set.localeCompare(b.set));
+  const doneShuka=doneListAll.filter(g=>!boardData.states[g.set].selfDel);
+  const doneSelf=doneListAll.filter(g=>!!boardData.states[g.set].selfDel);
+  const dBtn=(k,label,n)=>`<button class="btn ghost sm" data-bd-dview="${k}" style="${doneView===k?'color:var(--good);border-color:var(--good);font-weight:900':''}">${label}(${n})</button>`;
+  const head=`<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+    <h2 style="margin:0">📦 納品進捗</h2>
+    ${boardData.fetchedAt?`<span class="tag">${fmtHM(boardData.fetchedAt.toISOString())} 取得</span>`:''}
+    <div style="margin-left:auto;display:flex;gap:6px;flex-wrap:wrap">
+      ${dBtn('shuka','🚚 集荷完了一覧',doneShuka.length)}${dBtn('self','🚛 自己配完了一覧',doneSelf.length)}
+      <button class="btn ghost sm" data-bd-refresh>↻ 更新</button></div></div>
+`;
+  if(!scfg.url)return head+`<div class="info" style="margin-top:8px">仕入表と接続すると表示されます（「仕入表連携」タブで設定）</div>`;
+  if(!boardData.fetchedAt)return head+`<div class="empty">読み込み中…</div>`;
+  if(boardData.legacy)return head+`<div class="info" style="margin-top:8px;border-color:color-mix(in srgb,var(--crit) 40%,transparent)">⚠ <b>サーバー(Apps Script)が旧バージョンです。</b>納品ボードには最新のGASコードが必要です。仕入表連携.gsを貼り替えて「デプロイを管理 → ✏編集 → 新バージョン → デプロイ」を実行してください。</div>`;
+  // 番号の若い順(この順で納品していく)
+  const visible=boardData.groups.slice().sort((a,b)=>a.set.localeCompare(b.set))
+    .filter(g=>{const st=boardData.states[g.set];return !(st&&(st.done||st.hidden));});
+  // 追加SKUの進捗(タップで取り消し=撮影ミスの修正)
+  const estH=boardData.states&&boardData.states['_extraSKU'];
+  const exDone=Object.keys((estH&&estH.steps&&estH.steps.satsuei&&estH.steps.satsuei.checked)||{}).sort();
+  const shCH=(estH&&estH.steps&&estH.steps.shashin&&estH.steps.shashin.checked)||{};
+  const azCH=(estH&&estH.steps&&estH.steps.amazon&&estH.steps.amazon.checked)||{};
+  const extraCard=exDone.length?`<div style="margin-top:14px;background:var(--surface-2);border:1px solid var(--border);border-radius:17px;padding:13px 15px">
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <span style="font-weight:900;font-size:15px">🏷 追加SKUの進捗</span><span class="tag">${exDone.length}個</span>
+      <span style="font-size:12px;color:var(--muted)">📷撮影済 ・🖼=写真チェック済 ・🏷=Amazon済 / タップで取り消し(ミス修正)</span></div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:9px">
+      ${exDone.map(n=>`<button data-bd-ex="${esc(n)}" style="border:1.5px solid var(--border);background:var(--surface);border-radius:9px;padding:5px 10px;font-size:12.5px;font-weight:800;color:var(--ink2);cursor:pointer;font-family:inherit">${esc(n)} 📷${shCH[n]?'🖼':''}${azCH[n]?'🏷':''} ✕</button>`).join('')}</div></div>`:'';
+  const resale=boardData.resale||[];
+  const resaleCard=resale.length?`<div style="margin-top:14px;background:var(--surface-2);border:1.5px dashed var(--border);border-radius:17px;padding:13px 15px">
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <span style="font-weight:900;font-size:15px">🔁 再出品・再納品待ち</span><span class="tag">${resale.length}個</span>
+      <span style="font-size:12px;color:var(--muted)">セットの半数以上が納品済(白)のため通常セットと分けて表示</span></div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:9px">
+      ${resale.map(n=>`<span style="border:1.5px solid var(--border);background:var(--surface);border-radius:9px;padding:5px 10px;font-size:12.5px;font-weight:800;color:var(--ink2)">${esc(n)}</span>`).join('')}</div></div>`:'';
+  const setCard=g=>{
+    const st=boardData.states[g.set]||{selfDel:false,steps:{}};
+    const steps=displaySteps(g,st);
+    // 一部選択の進捗サマリ(トップ表示)
+    const partials=steps.filter(s=>s.k!=='shuka').map(s=>({s,info:stepInfo(stepItems(g,s.k),st.steps&&st.steps[s.k])}))
+      .filter(x=>!x.info.done&&x.info.cnt>0)
+      .map(x=>`<span class="tag" style="color:${tcolor(x.s.cvar)}">${x.s.label}: ${esc(x.info.label)}</span>`).join(' ');
+    const rows=steps.map(s=>{
+      if(s.k==='shuka'){
+        const on=st.steps&&st.steps.shuka&&st.steps.shuka.all;
+        return `<div style="display:flex;align-items:center;gap:9px;padding:7px 0;border-top:1px dashed var(--border)">
+          <span style="font-size:16px">${s.icon}</span><b style="font-size:14px">${s.label}</b>
+          <span style="margin-left:auto">${on
+            ?`<button class="btn ghost sm" data-bd-shuka="${g.set}" style="color:var(--good);border-color:var(--good)">✅ 依頼済み(取消)</button>`
+            :`<button class="btn primary sm" data-bd-shuka="${g.set}" style="background:linear-gradient(135deg,var(--zatsumu),color-mix(in srgb,var(--zatsumu) 70%,#000))">🚚 集荷依頼済みにする</button>`}</span></div>`;
+      }
+      const list=stepItems(g,s.k); // 写真チェック=撮影済のみ / Amazon貼付=写真チェック済のみ
+      const info=stepInfo(list,st.steps&&st.steps[s.k]);
+      if(STEP_PREV[s.k]&&!list.length)return `<div style="padding:7px 0;border-top:1px dashed var(--border)">
+        <div style="display:flex;align-items:center;gap:9px"><span style="font-size:16px">${s.icon}</span><b style="font-size:14px">${s.label}</b>
+        <span style="font-size:12.5px;color:var(--muted)">${s.k==='shashin'?'撮影待ち':'写真チェック待ち'}（前の工程が済んだSKUから選択可能になります）</span></div></div>`;
+      const key=g.set+'|'+s.k;
+      const grid=boardOpen[key]?`<div style="display:flex;gap:6px;flex-wrap:wrap;padding:8px 0 4px">
+        ${list.map(i=>{const on=st.steps&&st.steps[s.k]&&(st.steps[s.k].all||(st.steps[s.k].checked&&st.steps[s.k].checked[i]));
+          return `<button data-bd-item="${g.set}|${s.k}|${i}" style="border:1.5px solid ${on?tcolor(s.cvar):'var(--border)'};background:${on?tcolor(s.cvar):'var(--surface)'};color:${on?'#fff':'var(--ink2)'};border-radius:9px;padding:6px 9px;font-size:12.5px;font-weight:800;cursor:pointer;font-family:inherit"><span style="display:inline-block;width:1.05em;text-align:left;opacity:${on?1:0}">✓</span>${esc(i)}</button>`;}).join('')}</div>`:'';
+      return `<div style="padding:7px 0;border-top:1px dashed var(--border)">
+        <div style="display:flex;align-items:center;gap:9px">
+          <span style="font-size:16px">${s.icon}</span><b style="font-size:14px">${s.label}</b>
+          <span style="font-size:12.5px;font-weight:800;color:${info.done?'var(--good)':(info.cnt?tcolor(s.cvar):'var(--muted)')}">${esc(info.label)}</span>
+          <span style="margin-left:auto;display:flex;gap:6px">
+            ${info.done
+              ?`<button class="btn ghost sm" data-bd-clear="${g.set}|${s.k}" style="color:var(--crit)">↺ 全て解除</button>`
+              :`<button class="btn ghost sm" data-bd-all="${g.set}|${s.k}" style="color:${tcolor(s.cvar)}">✓ 全て完了</button>`}
+            <button class="btn ghost sm" data-bd-toggle="${key}">${boardOpen[key]?'閉じる':'個別に選択'}</button>
+          </span></div>${grid}</div>`;
+    }).join('');
+    return `<div style="margin-top:14px;background:var(--surface-2);border:1px solid var(--border);border-radius:17px;padding:13px 15px">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:6px">
+        <span style="font-weight:900;font-size:17px">${g.bat?'🔋':'📦'} ${esc(g.set)}〜</span>
+        <span class="tag">${g.items.length}個</span>${g.bat?'<span class="tag" style="color:var(--satsuei)">バッテリー</span>':''}
+        <button data-bd-self="${g.set}" class="btn ghost sm" style="${st.selfDel?'color:var(--good);border-color:var(--good)':''}"><span style="display:inline-block;width:1.05em;opacity:${st.selfDel?1:0}">✓</span>自己配送</button>
+        ${partials?`<span style="display:flex;gap:6px;flex-wrap:wrap">${partials}</span>`:''}
+        <button class="mini" data-bd-hide="${g.set}" title="非表示" style="margin-left:auto">✕</button>
+      </div>${rows}</div>`;
+  };
+  // 完了一覧(集荷完了/自己配完了) — 折りたたみ。展開するとホームと同じ操作が可能
+  let doneSection='';
+  if(doneView){
+    const list=doneView==='self'?doneSelf:doneShuka;
+    doneSection=`<div style="margin-top:12px;background:color-mix(in srgb,var(--good) 5%,var(--surface-2));border:1.5px solid color-mix(in srgb,var(--good) 35%,var(--border));border-radius:17px;padding:12px 14px">
+      <div style="font-weight:900;font-size:14.5px">${doneView==='self'?'🚛 自己配完了一覧':'🚚 集荷完了一覧'} <span class="tag">${list.length}セット</span>
+        <span style="font-size:12px;color:var(--muted);font-weight:600">クリックで展開。編集して完了条件を外れるとホームに戻ります</span></div>
+      ${list.length?list.map(g=>{
+        const st=boardData.states[g.set];
+        if(doneOpen[g.set])return `<div style="margin-top:8px"><button class="btn ghost sm" data-bd-dopen="${esc(g.set)}">▲ ${esc(g.set)}〜 を閉じる</button>${setCard(g)}</div>`;
+        return `<div data-bd-dopen="${esc(g.set)}" style="display:flex;align-items:center;gap:9px;padding:9px 4px;border-top:1px dashed var(--border);cursor:pointer">
+          <span style="font-weight:900">📦 ${esc(g.set)}〜</span><span class="tag">${g.items.length}個</span>
+          ${st.selfDel?'<span class="tag" style="color:var(--good)">自己配送</span>':''}
+          <span style="margin-left:auto;color:var(--muted);font-size:12.5px">▸ 展開</span></div>`;
+      }).join(''):`<div class="thint" style="margin-top:6px">完了したセットはまだありません</div>`}
+    </div>`;
+  }
+  if(!visible.length&&!resale.length&&!extraCard)return head+doneSection+`<div class="empty">進行中の納品セットはありません 🎉</div>`;
+  if(!visible.length)return head+doneSection+`<div class="empty" style="padding:14px 0">進行中の納品セットはありません</div>`+extraCard+resaleCard;
+  return head+doneSection+visible.map(setCard).join('')+extraCard+resaleCard;
+}
+document.addEventListener('click',e=>{
+  const b=e.target.closest('[data-bd-all],[data-bd-clear],[data-bd-toggle],[data-bd-item],[data-bd-shuka],[data-bd-self],[data-bd-hide],[data-bd-refresh],[data-bd-ex],[data-bd-dview],[data-bd-dopen]');
+  if(!b)return;
+  if(b.dataset.bdEx){
+    if(confirm(b.dataset.bdEx+' の追加SKUを取り消しますか？（撮影・写真チェック等の済がすべて解除されます）')){
+      extraRemove(b.dataset.bdEx);renderBoardPanels();
+    }
+    return;
+  }
+  if(b.dataset.bdDview){doneView=doneView===b.dataset.bdDview?null:b.dataset.bdDview;renderBoardPanels();return;}
+  if(b.dataset.bdDopen){doneOpen[b.dataset.bdDopen]=!doneOpen[b.dataset.bdDopen];renderBoardPanels();return;}
+  if(b.dataset.bdAll){const[s,st]=b.dataset.bdAll.split('|');bdAll(s,st);}
+  else if(b.dataset.bdClear){const[s,st]=b.dataset.bdClear.split('|');bdClear(s,st);}
+  else if(b.dataset.bdToggle){boardOpen[b.dataset.bdToggle]=!boardOpen[b.dataset.bdToggle];renderBoardPanels();}
+  else if(b.dataset.bdItem){const[s,st,it]=b.dataset.bdItem.split('|');bdItem(s,st,it);}
+  else if(b.dataset.bdShuka)bdShuka(b.dataset.bdShuka);
+  else if(b.dataset.bdSelf)bdSelf(b.dataset.bdSelf);
+  else if(b.dataset.bdHide)bdHide(b.dataset.bdHide);
+  else if(b.dataset.bdRefresh!==undefined)fetchBoard();
+});
+
 const CHG_COLOR={'白':'#ffffff','白系':'#f2f2f2','黒':'#333333','灰':'#999999','赤':'#e23b3b','桃':'#f27bb0','柿':'#f58220','黄':'#f5c400','緑':'#3bb545','水':'#40c8e0','青':'#3a6df0','紫':'#8a63f6'};
 const TYPE_STYLE={'変更':'var(--nouhin)','色変更':'var(--zatsumu)','要確認':'var(--satsuei)','警告':'var(--crit)','行追加':'var(--kenpin)','行削除':'var(--crit)'};
 
@@ -1162,10 +2409,14 @@ function kenpinAutoCounts(startISO,endISO,worker){
     // タイマーを回している本人の変更のみ数える(実行者不明分は含める。複数人登録「A・B」は各人にマッチ)
     if(worker&&c.editor&&c.editor!=='不明'&&c.editor!=='未設定'&&String(c.editor).split('・').indexOf(worker)<0)return;
     if(c.oldV==='灰'){
-      const no=c.no||('row'+c.row);
-      if(!(no in firstGray)||t<firstGray[no]) firstGray[no]=t; // 同一No.はその日の最初の1回だけ
+      const no=(c.no||('row'+c.row))+'|'+isoDay(c.t); // 同一No.は「同じ日」の最初の1回だけ(データは7日分あるため日付込みで判定)
+      if(!(no in firstGray)||t<firstGray[no]) firstGray[no]=t;
     }else if(c.oldV==='赤'&&c.newV!=='白'&&c.newV!=='灰'){
-      if(t>=s&&t<=e) re++; // 再検品は毎回カウント
+      if(String(c.note||'').indexOf('未検品')>=0){
+        // P列に「未検品」がある赤→他色は通常の検品としてカウント(同一No.は1日1個)
+        const no=(c.no||('row'+c.row))+'|'+isoDay(c.t);
+        if(!(no in firstGray)||t<firstGray[no]) firstGray[no]=t;
+      }else if(t>=s&&t<=e) re++; // それ以外の赤→他色は再検品として毎回カウント
     }
   });
   let cnt=0;
@@ -1196,13 +2447,13 @@ function renderChangePanels(){
     el.querySelectorAll('[data-chg-refresh]').forEach(b=>b.onclick=()=>fetchChanges(false,true));
   });
   if(window.__modalAuto)try{window.__modalAuto();}catch(e){} // 停止モーダルの自動カウントを更新
+  renderWarnHead();
 }
 function changesPanelHtml(full,worker){
   const head=`<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-    <h2 style="margin:0">📥 仕入表の変更点（今日）</h2>
+    <h2 style="margin:0">📥 仕入表の変更点${worker?'（'+esc(worker)+'作業分）':''}</h2>
     ${shiireData.fetchedAt?`<span class="tag">${fmtHM(shiireData.fetchedAt.toISOString())} 取得</span>`:''}
-    <div style="margin-left:auto"><button class="btn ghost sm" data-chg-refresh>↻ 更新</button></div></div>
-    <div class="sub" style="margin-top:3px">B列の色変更(白以外)・マスタ列の手修正・売値・仕入額・コンディション・管理番号・行の増減を自動表示。計測終了時と表示中1分毎に自動取得</div>`;
+    <div style="margin-left:auto"><button class="btn ghost sm" data-chg-refresh>↻ 更新</button></div></div>`;
   if(!scfg.url) return head+`<div class="info" style="margin-top:8px">まだ仕入表と接続されていません。「仕入表連携」タブの<b>接続設定</b>にウェブアプリURLを貼り付けてください（セットアップ手順も同タブにあります）。</div>`;
   if(shiireData.loading&&!shiireData.fetchedAt) return head+`<div class="empty">読み込み中…</div>`;
   // エラーでも過去に取得済みのデータがあれば表示を維持し、注意書きだけ添える
@@ -1211,16 +2462,38 @@ function changesPanelHtml(full,worker){
     :'';
   if(shiireData.error&&!shiireData.fetchedAt) return head+`<div class="info" style="margin-top:8px;border-color:color-mix(in srgb,var(--crit) 40%,transparent)">⚠ 接続できませんでした — <b>${esc(shiireData.error)}</b><br>15秒後に自動再試行します。原因調査には「仕入表連携」タブの<b>🩺 詳細診断</b>を押してください。<span style="color:var(--muted)">(${APP_VER})</span></div>`;
   const all=shiireData.changes||[];
-  const whiteN=all.filter(c=>c.type==='白変更').length;
+  const whiteN=all.filter(c=>c.type==='白変更'&&isoDay(c.t)===todayStr()).length;
   const CONDS=['状態','外観','ファインダー','液晶','光学'];
-  const list=all.filter(c=>c.type!=='白変更')
+  let list=all.filter(c=>c.type!=='白変更')
     .filter(c=>!(CONDS.includes(c.col)&&String(c.newV).trim()==='なし')); // 「なし」選択は表示しない
-  // 警告バナー: 個人ページではその人宛のみ / 仕入表連携タブでは全員分
-  const myWarns=list.filter(c=>c.type==='警告'&&(worker?String(c.editor||'').split('・').indexOf(worker)>=0:true));
-  let warnHtml=myWarns.map(c=>`<div class="info" style="margin-top:8px;border-color:color-mix(in srgb,var(--crit) 45%,transparent);background:color-mix(in srgb,var(--crit) 8%,var(--surface))">
-    🚨 <b>${esc(c.editor)}へ:</b> No.${esc(c.no)} ${c.sku?'/ '+esc(c.sku):''} — ${esc(c.note)}</div>`).join('');
-  if(!list.length) return head+errNote+warnHtml+`<div class="empty">今日の変更はまだありません${whiteN?`（白変更 ${whiteN}件は納品用に記録中）`:''}</div>`;
-  // 商品ごとに1カード(No.単位でまとめる。SKUは後から入力されても同じカードに)
+  // 個人ページでは本人が変更した内容のみ / 管理者ページ・仕入表連携タブは絞り込みボタンで選択
+  if(worker)list=list.filter(c=>String(c.editor||'').split('・').indexOf(worker)>=0);
+  else if(full&&chgFilterW!=='all')list=list.filter(c=>String(c.editor||'').split('・').indexOf(chgFilterW)>=0);
+  const fwBtns=(full&&!worker)?`<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:9px">
+    ${['all',...WORKERS].map(w=>`<button class="btn ${chgFilterW===w?'primary':'ghost'} sm" data-chg-fw="${w}" ${w!=='all'&&chgFilterW!==w?`style="color:${wcolHex(w)}"`:''}>${w==='all'?'👥 全員':w}</button>`).join('')}</div>`:'';
+  if(!list.length) return head+fwBtns+errNote+`<div class="empty">直近7日の変更はありません${whiteN?`（白変更 ${whiteN}件は納品用に記録中）`:''}</div>`;
+  // ===== 日付ごとにまとめて折りたたみ表示(今日だけ初期展開) =====
+  if(chgDayOpen===null)chgDayOpen={[todayStr()]:true};
+  const byDay={};list.forEach(c=>{const d=isoDay(c.t);(byDay[d]=byDay[d]||[]).push(c);});
+  const days=Object.keys(byDay).sort().reverse();
+  const dayHtml=days.map(dy=>{
+    const arr=byDay[dy];
+    const prodN=new Set(arr.map(c=>c.no||'?')).size;
+    const open=!!chgDayOpen[dy];
+    const d0=new Date(dy+'T00:00:00');
+    const label=`${d0.getMonth()+1}/${String(d0.getDate()).padStart(2,'0')}（${'日月火水木金土'[d0.getDay()]}）`;
+    const isToday=dy===todayStr();
+    return `<div style="margin-top:10px;border:1px solid var(--border);border-radius:14px;overflow:hidden">
+      <div data-chg-day="${dy}" style="display:flex;align-items:center;gap:10px;padding:10px 14px;cursor:pointer;background:var(--surface-2)">
+        <b style="font-size:14px">📅 ${label}</b>${isToday?'<span class="tag" style="color:var(--kenpin);font-weight:800">今日</span>':''}
+        <span class="tag">${prodN}商品・${arr.length}件</span>
+        <span style="margin-left:auto;color:var(--muted);font-size:12.5px">${open?'▲ 閉じる':'▼ 開く'}</span></div>
+      ${open?`<div style="padding:2px 13px 13px">${chgDayCards(arr,full,dy+'|')}</div>`:''}</div>`;
+  }).join('');
+  return head+fwBtns+errNote+dayHtml+(whiteN?`<div class="thint" style="margin-top:8px">🤍 白への色変更 ${whiteN}件は納品管理用に記録中（変更点には表示しません）</div>`:'');
+}
+/* 1日分の変更カード(商品No.ごとに1カード) */
+function chgDayCards(list,full,pfx){
   const groups={},order=[];
   list.forEach(c=>{const k=c.no||'?';if(!groups[k]){groups[k]=[];order.push(k);}groups[k].push(c);});
   const shown=full?order:order.slice(0,8);
@@ -1270,7 +2543,7 @@ function changesPanelHtml(full,worker){
       const arr=colGroups['状態'].filter(c=>String(c.oldV).trim()!=='');
       if(arr.length){
         const chain=chainOf(arr);
-        const key=no+'|状態';
+        const key=pfx+no+'|状態';
         lineArr.push({ord:COL_ORDER['状態']??14,html:row(
           `<span class="pill" style="background:var(--satsuei);flex:0 0 auto">状態変更</span>
            <span style="min-width:0">状態: ${chain.map(v=>`「${esc(v)}」`).join(' → ')}</span>`,
@@ -1296,7 +2569,7 @@ function changesPanelHtml(full,worker){
       }
       if(edits.length){
         const chain=chainOf(edits);
-        const key=no+'|'+cn+'_fix';
+        const key=pfx+no+'|'+cn+'_fix';
         lineArr.push({ord:(COL_ORDER['状態']??14)+0.1,html:row(
           `<span class="pill" style="background:var(--satsuei);flex:0 0 auto">修正</span>
            <span style="min-width:0">${esc(cn)}: ${chain.map(v=>`「${esc(v)}」`).join(' → ')}</span>`,
@@ -1306,7 +2579,7 @@ function changesPanelHtml(full,worker){
     });
     if(condParts.length){
       condAll.sort((a,b)=>new Date(a.t)-new Date(b.t));
-      const key=no+'|コンディション';
+      const key=pfx+no+'|コンディション';
       lineArr.push({ord:COL_ORDER['外観']??15,html:row(
         `<span class="pill" style="background:${TYPE_STYLE['変更']};flex:0 0 auto">変更</span>
          <span style="min-width:0">コンディション: ${condParts.join(' ・ ')}</span>`,
@@ -1315,7 +2588,7 @@ function changesPanelHtml(full,worker){
     // ◆ それ以外の列は従来どおり列ごとに1行
     Object.entries(colGroups).forEach(([colName,arr])=>{
       const isColor=colName==='B列色';
-      const key=no+'|'+colName;
+      const key=pfx+no+'|'+colName;
       const chain=isColor?[arr[0].oldV,...arr.map(c=>c.newV)].filter((v,i,a)=>i===0||v!==a[i-1]):chainOf(arr);
       const last=arr[arr.length-1];
       let main;
@@ -1337,8 +2610,7 @@ function changesPanelHtml(full,worker){
       <div style="font-weight:900;font-size:14px">📦 No.${esc(no)}${sku?` <span style="color:var(--muted);font-weight:600;font-size:12px">SKU: ${esc(sku)}</span>`:''}</div>${lineArr.map(l=>l.html).join('')}</div>`;
   }).join('');
   const more=!full&&order.length>shown.length?`<div class="thint" style="margin-top:8px;text-align:center">ほか ${order.length-shown.length} 商品の変更あり — 「仕入表連携」タブで全件表示</div>`:'';
-  const whiteNote=whiteN?`<div class="thint" style="margin-top:8px">🤍 白への色変更 ${whiteN}件は納品管理用に記録中（変更点には表示しません）</div>`:'';
-  return head+errNote+warnHtml+body+more+whiteNote;
+  return body+more;
 }
 
 /* ============================================================
@@ -1371,6 +2643,8 @@ function autoStopCheck(){
 setInterval(autoStopCheck,30000);
 
 /* ---------- theme / clock ---------- */
+document.getElementById('manualBtn').onclick=openStaffManual;
+document.getElementById('warnBtn').onclick=openWarns;
 document.getElementById('themeBtn').onclick=()=>{const cur=document.documentElement.getAttribute('data-theme');
   const nx=cur==='dark'?'light':'dark';document.documentElement.setAttribute('data-theme',nx);
   document.getElementById('themeBtn').textContent=nx==='dark'?'☀️':'🌙';render();};
